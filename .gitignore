@@ -2,7 +2,7 @@
 venv/
 
 # Streamlit configuration
-.streamlit/
+.streamlit/secrets.toml
 
 # Python cache files
 __pycache__/
