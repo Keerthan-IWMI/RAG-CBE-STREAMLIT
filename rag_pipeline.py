@@ -8,7 +8,7 @@ from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer
 from openai import AzureOpenAI
 import logging
-
+import requests
 from langchain_community.vectorstores import FAISS
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
@@ -208,21 +208,46 @@ class RAGPipeline:
         self,
         pdf_folder: str,
         index_file: str,
-        azure_key: str,
-        azure_endpoint: str,
-        azure_deployment: str
+        model_params: dict,
     ):
         # Paths
         self.pdf_folder = pdf_folder
         self.index_file = index_file
+        # ------------------------------------------------------------------
+        # 2. Detect LLM type from the dict
+        # ------------------------------------------------------------------
+        llm_type = model_params.get("llm_type", "").lower()
+        if llm_type not in ("azure", "deepseek"):
+            raise ValueError("model_params['llm_type'] must be 'azure' or 'deepseek'")
+
+        self.llm_type = llm_type
         
-        # Azure OpenAI setup
-        self.llm_client = AzureOpenAI(
-            api_key=azure_key,
-            api_version="2024-02-15-preview",
-            azure_endpoint=azure_endpoint
-        )
-        self.azure_deployment = azure_deployment
+       # ------------------------------------------------------------------
+        # 3. Azure OpenAI
+        # ------------------------------------------------------------------
+        if self.llm_type == "azure":
+            required = ["azure_key", "azure_endpoint", "azure_deployment"]
+            missing = [k for k in required if k not in model_params]
+            if missing:
+                raise ValueError(f"Missing Azure keys in model_params: {missing}")
+
+            self.llm_client = AzureOpenAI(
+                api_key=model_params["azure_key"],
+                api_version="2024-02-15-preview",
+                azure_endpoint=model_params["azure_endpoint"],
+            )
+            self.azure_deployment = model_params["azure_deployment"]
+
+        # ------------------------------------------------------------------
+        # 4. DeepSeek (HF Inference API)
+        # ------------------------------------------------------------------
+        else:  # deepseek
+            if "hf_token" not in model_params:
+                raise ValueError("hf_token is required for DeepSeek")
+            self.hf_token      = model_params["hf_token"]
+            self.deepseek_url  = model_params.get("deepseek_url",
+                                 "https://api.deepseek.com/v1/chat/completions")
+            self.deepseek_model = model_params.get("deepseek_model", "deepseek-ai/DeepSeek-V3.1:novita")
         
         # Models
         self.embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
@@ -460,17 +485,48 @@ ANSWER (with citations):"""
             {"role": "user", "content": user_prompt}
         ]
         
-        # Call LLM
+     # --------------------------------------------------------------
+        # CALL THE SELECTED LLM
+        # --------------------------------------------------------------
         try:
-            response = self.llm_client.chat.completions.create(
-                model=self.azure_deployment,
-                messages=messages,
-                max_tokens=3500
-            )
-            return response.choices[0].message.content.strip()
-        
+            if self.llm_type == "azure":
+                resp = self.llm_client.chat.completions.create(
+                    model=self.azure_deployment,
+                    messages=messages,
+                    max_tokens=3500,
+                    temperature=0.1,
+                )
+                return resp.choices[0].message.content.strip()
+
+            else:  # deepseek
+                headers = {
+                    "Authorization": f"Bearer {self.hf_token}",
+                    "Content-Type":  "application/json"
+                }
+                payload = {
+                    "model":       self.deepseek_model,
+                    "messages":    messages,
+                    "max_tokens":  3500,
+                    "temperature": 0.1
+                }
+
+                logger.info(f"Calling DeepSeek API ({len(messages)} msgs)")
+                r = requests.post(self.deepseek_url, headers=headers, json=payload, timeout=60)
+
+                if r.status_code == 200:
+                    data = r.json()
+                    if data.get("choices"):
+                        return data["choices"][0]["message"]["content"].strip()
+                    else:
+                        logger.error(f"DeepSeek unexpected payload: {data}")
+                        return "Error: Unexpected DeepSeek response"
+                else:
+                    err = f"DeepSeek API {r.status_code}: {r.text}"
+                    logger.error(err)
+                    return f"Sorry, model error: {err}"
+
         except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
+            logger.error(f"LLM failure ({self.llm_type}): {e}")
             return "Sorry, I encountered an error generating the response."
     
     def get_stats(self) -> Dict:
