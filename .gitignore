@@ -1,0 +1,14 @@
+# Python virtual environment
+venv/
+
+# Streamlit configuration
+.streamlit/
+
+# Python cache files
+__pycache__/
+
+# Data folder (if you don’t want to track large datasets)
+data/
+
+# Dev container settings
+.devcontainer/
