@@ -14,10 +14,116 @@ from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-
+import tiktoken
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+class ConversationManager:
+    """Manages conversation history with model-aware token limits"""
+    
+    # Context window limits (tokens)
+    MODEL_LIMITS = {
+        "deepseek": 64000,    # DeepSeek-V3
+        "azure": 128000,      # GPT-4o-mini
+    }
+    
+    def __init__(self, llm_type: str, reserve_tokens: int = 8000):
+        """
+        Args:
+            llm_type: "azure" or "deepseek"
+            reserve_tokens: Tokens to reserve for system prompt + retrieved docs + response
+        """
+        self.llm_type = llm_type.lower()
+        self.max_context = self.MODEL_LIMITS.get(self.llm_type, 64000)
+        self.reserve_tokens = reserve_tokens
+        self.available_for_history = self.max_context - self.reserve_tokens
+        
+        # Initialize tokenizer for counting
+        try:
+            # GPT-4o and DeepSeek use similar tokenization
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        except:
+            logger.warning("Failed to load tiktoken, using fallback estimation")
+            self.tokenizer = None
+        
+        self.history = []  # List of {"role": "user/assistant", "content": "..."}
+        
+        logger.info(f"ConversationManager initialized: {self.llm_type}, "
+                   f"max={self.max_context}, available_for_history={self.available_for_history}")
+    
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text"""
+        if self.tokenizer:
+            return len(self.tokenizer.encode(text))
+        else:
+            # Fallback: rough estimation (1 token ≈ 4 characters)
+            return len(text) // 4
+    
+    def count_messages_tokens(self, messages: List[Dict[str, str]]) -> int:
+        """Count tokens in message list"""
+        total = 0
+        for msg in messages:
+            # Count content tokens
+            total += self.count_tokens(msg["content"])
+            # Add overhead for message formatting (~4 tokens per message)
+            total += 4
+        return total
+    
+    def add_exchange(self, user_message: str, assistant_message: str):
+        """Add a Q&A pair to history with automatic truncation"""
+        # Add new messages
+        self.history.append({"role": "user", "content": user_message})
+        self.history.append({"role": "assistant", "content": assistant_message})
+        
+        # Truncate if needed
+        self._truncate_to_fit()
+    
+    def _truncate_to_fit(self):
+        """Remove oldest messages until history fits in available token budget"""
+        current_tokens = self.count_messages_tokens(self.history)
+        
+        # Keep removing oldest Q&A pairs until we fit
+        while current_tokens > self.available_for_history and len(self.history) > 2:
+            # Remove oldest Q&A pair (first 2 messages)
+            removed = self.history[:2]
+            self.history = self.history[2:]
+            
+            removed_tokens = self.count_messages_tokens(removed)
+            current_tokens -= removed_tokens
+            
+            logger.info(f"Truncated conversation: removed {removed_tokens} tokens, "
+                       f"remaining={current_tokens}/{self.available_for_history}")
+        
+        # Log if we're getting close to limit
+        if current_tokens > self.available_for_history * 0.8:
+            pairs = len(self.history) // 2
+            logger.warning(f"Conversation history at 80% capacity: {current_tokens} tokens, {pairs} pairs")
+    
+    def get_history(self) -> List[Dict[str, str]]:
+        """Get current conversation history"""
+        return self.history.copy()
+    
+    def get_history_tokens(self) -> int:
+        """Get current token count of history"""
+        return self.count_messages_tokens(self.history)
+    
+    def clear(self):
+        """Clear conversation history"""
+        self.history = []
+        logger.info("Conversation history cleared")
+    
+    def get_stats(self) -> Dict:
+        """Get conversation statistics"""
+        pairs = len(self.history) // 2
+        tokens = self.count_messages_tokens(self.history)
+        
+        return {
+            "total_exchanges": pairs,
+            "history_tokens": tokens,
+            "available_tokens": self.available_for_history,
+            "utilization_percent": round((tokens / self.available_for_history) * 100, 1),
+            "model": self.llm_type,
+            "max_context": self.max_context
+        }
 #sentence-transformers/all-mpnet-base-v2
 class PDFExtractor:
     """Handles PDF extraction with layout preservation"""
@@ -203,26 +309,31 @@ class PDFExtractor:
 
 class RAGPipeline:
     """Main RAG pipeline for PDF question answering"""
-    
     def __init__(
         self,
         pdf_folder: str,
         index_file: str,
         model_params: dict,
+        reserve_tokens: int = 8000,
     ):
         # Paths
         self.pdf_folder = pdf_folder
         self.index_file = index_file
-        # ------------------------------------------------------------------
-        # 2. Detect LLM type from the dict
-        # ------------------------------------------------------------------
+        
+        # Detect LLM type
         llm_type = model_params.get("llm_type", "").lower()
         if llm_type not in ("azure", "deepseek"):
             raise ValueError("model_params['llm_type'] must be 'azure' or 'deepseek'")
-
+        
         self.llm_type = llm_type
         
-       # ------------------------------------------------------------------
+        # Initialize conversation manager
+        self.conversation_manager = ConversationManager(
+            llm_type=self.llm_type,
+            reserve_tokens=reserve_tokens
+        )
+        
+        # ------------------------------------------------------------------
         # 3. Azure OpenAI
         # ------------------------------------------------------------------
         if self.llm_type == "azure":
@@ -246,7 +357,7 @@ class RAGPipeline:
                 raise ValueError("hf_token is required for DeepSeek")
             self.hf_token      = model_params["hf_token"]
             self.deepseek_url  = model_params.get("deepseek_url",
-                                 "https://api.deepseek.com/v1/chat/completions")
+                                "https://api.deepseek.com/v1/chat/completions")
             self.deepseek_model = model_params.get("deepseek_model", "deepseek-ai/DeepSeek-V3.1:novita")
         
         # Models
@@ -423,10 +534,7 @@ class RAGPipeline:
             return False
     
     def query(self, question: str, top_k: int = 8) -> Tuple[str, List[Document]]:
-        """
-        Query the RAG system
-        Returns: (answer, retrieved_documents)
-        """
+
         if self.hybrid_retriever is None:
             raise ValueError("Index not loaded. Call load_index() or build_index() first.")
         
@@ -434,17 +542,25 @@ class RAGPipeline:
         retrieved_docs = self.hybrid_retriever.invoke(question)
         
         if not retrieved_docs:
-            return "I couldn't find relevant information in the documents.", []
+            answer = "I couldn't find relevant information in the documents."
+            return answer, []
         
-        # Take top K
         top_docs = retrieved_docs[:top_k]
         
-        # Generate answer
-        answer = self._generate_answer(question, top_docs)
+        # Generate answer with history
+        answer = self._generate_answer_with_history(question, top_docs)
+        
+        # Store this exchange in history
+        self.conversation_manager.add_exchange(question, answer)
+        
+        # Log conversation stats
+        stats = self.conversation_manager.get_stats()
+        logger.info(f"Conversation: {stats['total_exchanges']} exchanges, "
+                f"{stats['history_tokens']} tokens ({stats['utilization_percent']}% of available)")
         
         return answer, top_docs
     
-    def _generate_answer(self, question: str, context_docs: List[Document]) -> str:
+    def _generate_answer_with_history(self, question: str, context_docs: List[Document]) -> str:
         """Generate answer using LLM"""
         # Build context
         context_parts = []
@@ -468,6 +584,8 @@ Role and Behaviour:
 - Remain accurate, context-aware, and user-oriented, tailoring responses to the user’s role (e.g., policymaker vs. entrepreneur).
 - Use information strictly derived from the uploaded IWMI documents (at this stage) and clearly indicate when requested information cannot be found or falls outside the scope of the available materials.
 - Maintain a logical and structured conversation flow, referring to previous exchanges when needed.
+- Maintain conversation context and refer to previous exchanges when relevant.
+- For follow-up questions like "tell me more" or "explain that further", use the conversation history to provide coherent, contextual responses.
 \n
 Tone and Communication Style:
 - Professional, clear, neutral, and factual.
@@ -492,13 +610,17 @@ Restrictions and Limitations:
 - Always clarify if a recommendation is derived from evidence (explicitly present in documents) or an inferred interpretation (logical synthesis based on available content).
 \n
 Response Format:
-
-- Overview → summary of answer and key findings
-- Key Points → main findings or insights
-- Implications → practical relevance or recommendations
-- Always cite sources in [Source X] format after each claim
-- Reference tables or data explicitly when mentioned
-- Combine information from multiple sources when relevant
+- **Overview:** Provide a summary of the findings.
+- **Key Points:** Present main findings or insights as concise bullet points (✓ or •).
+- **Implications:** Present the practical or policy relevance as bullet points.
+- **If comparative or quantitative data are available**, display them using a **Markdown table** (| Column | Column |).
+- **Always cite sources** in [Source X] format after each claim.
+- **Avoid long paragraphs**; favor bullet points and tabular summaries for clarity.
+- **Combine multiple document sources when possible** to provide integrated insights.
+\n
+### CONVERSATION FLOW & ENGAGEMENT (MANDATORY)
+- **Every response must end with a proactive, context-aware follow-up question or suggestion.**
+- This keeps the conversation alive and guides the user toward deeper insights.
 \n
 Information Use:
 - For general/greeting questions, ignore retrieved content and respond from general knowledge.
@@ -514,10 +636,24 @@ QUESTION: {question}
 
 ANSWER (with citations):"""
         
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
+        # Build messages with conversation history
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history
+        history = self.conversation_manager.get_history()
+        if history:
+            messages.extend(history)
+            logger.debug(f"Including {len(history)} history messages "
+                        f"({self.conversation_manager.get_history_tokens()} tokens)")
+
+        # Add current query with context
+        messages.append({"role": "user", "content": user_prompt})
+
+        # Log total message tokens
+        if self.conversation_manager.tokenizer:
+            total_input_tokens = self.conversation_manager.count_messages_tokens(messages)
+            logger.info(f"Total input tokens: {total_input_tokens} "
+                    f"(limit: {self.conversation_manager.max_context})")
         
      # --------------------------------------------------------------
         # CALL THE SELECTED LLM
@@ -562,6 +698,11 @@ ANSWER (with citations):"""
         except Exception as e:
             logger.error(f"LLM failure ({self.llm_type}): {e}")
             return "Sorry, I encountered an error generating the response."
+    def clear_conversation(self):
+        self.conversation_manager.clear()
+
+    def get_conversation_stats(self) -> Dict:
+        return self.conversation_manager.get_stats()
     
     def get_stats(self) -> Dict:
         """Get index statistics"""
