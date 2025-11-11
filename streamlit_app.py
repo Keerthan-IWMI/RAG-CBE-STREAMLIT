@@ -604,7 +604,7 @@ def main():
             st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
             st.session_state.rag_loaded = False
             st.session_state.is_switching = True
-            save_conversation()
+            #save_conversation()
             st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -617,7 +617,7 @@ def main():
         
         with col1:
             if st.button("🔄 New", use_container_width=True, help="Start a new conversation"):
-                save_conversation()
+                #save_conversation()
                 st.session_state.messages = []
                 st.session_state.total_queries = 0
                 st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -770,7 +770,7 @@ def main():
                 st.session_state.total_queries += 1
                 
                 # Auto-save conversation
-                save_conversation()
+               # save_conversation()
             
             except Exception as e:
                 error_msg = f"⚠️ **Processing Error**\n\nI encountered an issue while processing your query: `{str(e)}`\n\nPlease try rephrasing your question or contact support if the issue persists."
