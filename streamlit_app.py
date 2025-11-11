@@ -349,7 +349,67 @@ def load_custom_css():
     }}
     
     /* Hide Streamlit Elements */
-    #MainMenu, footer, header {{visibility: hidden;}}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    
+    /* Hide Deploy button */
+    .stDeployButton {{
+        display: none !important;
+        visibility: hidden !important;
+    }}
+    
+    [data-testid="stToolbar"] {{
+        display: none !important;
+        visibility: hidden !important;
+    }}
+    
+    /* Hide the entire top-right menu area */
+    header[data-testid="stHeader"] > div:first-child {{
+        display: none !important;
+    }}
+    
+    /* Make sure sidebar toggle button is always visible */
+    [data-testid="stSidebarNav"] {{
+        display: block !important;
+    }}
+    
+    button[kind="header"] {{
+        display: block !important;
+        visibility: visible !important;
+    }}
+    
+    /* Sidebar collapse button styling */
+    [data-testid="collapsedControl"] {{
+        display: flex !important;
+        visibility: visible !important;
+        color: {PRIMARY_COLOR} !important;
+        background: white !important;
+        border: 2px solid {PRIMARY_COLOR} !important;
+        border-radius: 8px !important;
+        padding: 0.5rem !important;
+        margin: 1rem !important;
+        box-shadow: 0 2px 8px rgba(15, 118, 110, 0.2) !important;
+    }}
+    
+    [data-testid="collapsedControl"]:hover {{
+        background: {BACKGROUND_LIGHT} !important;
+        transform: scale(1.05);
+        box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3) !important;
+    }}
+    
+    /* Ensure the header area shows the toggle */
+    header {{
+        visibility: visible !important;
+    }}
+    
+    header[data-testid="stHeader"] {{
+        background-color: transparent !important;
+    }}
+    
+    /* Sidebar open/close button */
+    section[data-testid="stSidebar"] button[kind="header"] {{
+        color: {PRIMARY_COLOR} !important;
+    }}
     
     /* Scrollbar */
     ::-webkit-scrollbar {{
@@ -460,7 +520,7 @@ def save_conversation():
         
         return True
     except Exception as e:
-        # st.error(f"❌ Failed to save conversation: {e}")
+        st.error(f"❌ Failed to save conversation: {e}")
         return False
 
 def clean_text_for_pdf(text):
@@ -604,7 +664,6 @@ def main():
             st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
             st.session_state.rag_loaded = False
             st.session_state.is_switching = True
-            #save_conversation()
             st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -617,7 +676,7 @@ def main():
         
         with col1:
             if st.button("🔄 New", use_container_width=True, help="Start a new conversation"):
-                #save_conversation()
+                st.session_state.rag.clear_conversation()
                 st.session_state.messages = []
                 st.session_state.total_queries = 0
                 st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -627,6 +686,7 @@ def main():
         with col2:
             if st.button("🗑️ Clear", use_container_width=True, help="Clear all messages"):
                 if len(st.session_state.messages) > 0:
+                    st.session_state.rag.clear_conversation() 
                     st.session_state.messages = []
                     st.session_state.total_queries = 0
                     st.toast("🧹 Chat cleared!", icon="✅")
@@ -768,9 +828,6 @@ def main():
                     "references": references
                 })
                 st.session_state.total_queries += 1
-                
-                # Auto-save conversation
-               # save_conversation()
             
             except Exception as e:
                 error_msg = f"⚠️ **Processing Error**\n\nI encountered an issue while processing your query: `{str(e)}`\n\nPlease try rephrasing your question or contact support if the issue persists."
