@@ -15,7 +15,7 @@ tiktoken
 faiss-cpu
 sentence-transformers
 rank-bm25
-
+fpdf
 # ML + Transformers
 torch
 torchvision
@@ -28,3 +28,4 @@ tenacity
 python-dateutil
 PyYAML
 tiktoken
+
