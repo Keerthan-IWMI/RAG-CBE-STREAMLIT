@@ -351,60 +351,69 @@ def load_custom_css():
     /* Hide Streamlit Elements */
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
-    
-    /* Hide Deploy button */
-    .stDeployButton {{
-        display: none !important;
-        visibility: hidden !important;
-    }}
-    
-    [data-testid="stToolbar"] {{
-        display: none !important;
-        visibility: hidden !important;
-    }}
-    
-    /* Hide the entire top-right menu area */
-    header[data-testid="stHeader"] > div:first-child {{
-        display: none !important;
-    }}
-    
-    /* Make sure sidebar toggle button is always visible */
-    [data-testid="stSidebarNav"] {{
-        display: block !important;
-    }}
-    
-    button[kind="header"] {{
-        display: block !important;
-        visibility: visible !important;
-    }}
-    
-    /* Sidebar collapse button styling */
-    [data-testid="collapsedControl"] {{
-        display: flex !important;
-        visibility: visible !important;
-        color: {PRIMARY_COLOR} !important;
-        background: white !important;
-        border: 2px solid {PRIMARY_COLOR} !important;
-        border-radius: 8px !important;
-        padding: 0.5rem !important;
-        margin: 1rem !important;
-        box-shadow: 0 2px 8px rgba(15, 118, 110, 0.2) !important;
-    }}
-    
-    [data-testid="collapsedControl"]:hover {{
-        background: {BACKGROUND_LIGHT} !important;
-        transform: scale(1.05);
-        box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3) !important;
-    }}
-    
-    /* Ensure the header area shows the toggle */
-    header {{
-        visibility: visible !important;
-    }}
-    
+
+    /* Make header bar blend into the background by matching the color */
     header[data-testid="stHeader"] {{
-        background-color: transparent !important;
+        background: linear-gradient(180deg, {BACKGROUND_LIGHT} 100%, #ECFDF5 0%, #F0F9FF 10%);
+        border-bottom: none;
+        
     }}
+    
+    # /* Hide Deploy button */
+    # .stDeployButton {{
+    #     display: none !important;
+    #     visibility: hidden !important;
+    # }}
+    
+    # [data-testid="stToolbar"] {{
+    #     display: none !important;
+    #     visibility: hidden !important;
+    # }}
+    
+    # /* Hide the entire top-right menu area */
+    # header[data-testid="stHeader"] > div:first-child {{
+    #     display: none !important;
+    # }}
+    
+    # /* Make sure sidebar toggle button is always visible */
+    # [data-testid="stSidebarNav"] {{
+    #     display: block !important;
+    # }}
+    
+    # button[kind="header"] {{
+    #     display: block !important;
+    #     visibility: visible !important;
+    # }}
+    
+    # /* Sidebar collapse button styling */
+    # [data-testid="collapsedControl"] {{
+    #     display: flex !important;
+    #     visibility: visible !important;
+    #     color: {PRIMARY_COLOR} !important;
+    #     background: white !important;
+    #     border: 2px solid {PRIMARY_COLOR} !important;
+    #     border-radius: 8px !important;
+    #     padding: 0.5rem !important;
+    #     margin: 1rem !important;
+    #     box-shadow: 0 2px 8px rgba(15, 118, 110, 0.2) !important;
+    # }}
+    
+    # [data-testid="collapsedControl"]:hover {{
+    #     background: {BACKGROUND_LIGHT} !important;
+    #     transform: scale(1.05);
+    #     box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3) !important;
+    # }}
+    
+    # /* Ensure the header area shows the toggle */
+    # header {{
+    #     visibility: visible !important;
+    # }}
+    
+    # header[data-testid="stHeader"] {{
+    #     background-color: transparent !important;
+    # }}
+
+
     
     /* Sidebar open/close button */
     section[data-testid="stSidebar"] button[kind="header"] {{

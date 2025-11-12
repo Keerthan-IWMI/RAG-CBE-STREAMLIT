@@ -15,16 +15,18 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import tiktoken
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 class ConversationManager:
     """Manages conversation history with model-aware token limits"""
     
     # Context window limits (tokens)
     MODEL_LIMITS = {
-        "deepseek": 64000,    # DeepSeek-V3
-        "azure": 128000,      # GPT-4o-mini
-    }
+                    "deepseek": 64000,    # DeepSeek-V3
+                    "azure": 128000,      # GPT-4o-mini
+                   }
     
     def __init__(self, llm_type: str, reserve_tokens: int = 8000):
         """
@@ -40,10 +42,10 @@ class ConversationManager:
         # Initialize tokenizer for counting
         try:
             # GPT-4o and DeepSeek use similar tokenization
-            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            self.tokenizer = tiktoken.get_encoding("cl100k_base") ##We're loading up an encoding object to the tokenizer instance variable.
         except:
             logger.warning("Failed to load tiktoken, using fallback estimation")
-            self.tokenizer = None
+            self.tokenizer = None 
         
         self.history = []  # List of {"role": "user/assistant", "content": "..."}
         
@@ -53,7 +55,7 @@ class ConversationManager:
     def count_tokens(self, text: str) -> int:
         """Count tokens in text"""
         if self.tokenizer:
-            return len(self.tokenizer.encode(text))
+            return len(self.tokenizer.encode(text))##The tokenizer instance variable would encode the given text to some numeric token list.
         else:
             # Fallback: rough estimation (1 token ≈ 4 characters)
             return len(text) // 4
@@ -614,9 +616,9 @@ Response Format:
 - **Key Points:** Present main findings or insights as concise bullet points (✓ or •).
 - **Implications:** Present the practical or policy relevance as bullet points.
 - **If comparative or quantitative data are available**, display them using a **Markdown table** (| Column | Column |).
-- **Always cite sources** in [Source X] format after each claim.
+- **Always cite sources** in [Source X] format after each claim. Where X corresponds to actual source author, title, page number.
 - **Avoid long paragraphs**; favor bullet points and tabular summaries for clarity.
-- **Combine multiple document sources when possible** to provide integrated insights.
+- **Don't needlessly combine too many sources. Only cite sources that are 0.8 or higher probabilisitcally in relevance to the prompt** to provide integrated insights.
 \n
 ### CONVERSATION FLOW & ENGAGEMENT (MANDATORY)
 - **Every response must end with a proactive, context-aware follow-up question or suggestion.**
