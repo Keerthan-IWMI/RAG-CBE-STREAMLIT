@@ -616,9 +616,9 @@ Response Format:
 - **Key Points:** Present main findings or insights as concise bullet points (✓ or •).
 - **Implications:** Present the practical or policy relevance as bullet points.
 - **If comparative or quantitative data are available**, display them using a **Markdown table** (| Column | Column |).
-- **Always cite sources** in [Source X] format after each claim. Where X corresponds to actual source author, title, page number.
+- **Always cite sources** in [Source_name, author, year] format after each claim.
 - **Avoid long paragraphs**; favor bullet points and tabular summaries for clarity.
-- **Don't needlessly combine too many sources. Only cite sources that are 0.8 or higher probabilisitcally in relevance to the prompt** to provide integrated insights.
+- **Don't needlessly combine too many sources. Only cite sources that are 0.8 or higher probabilisitcally in relevance to the prompt. If only one source fits the prompt. Cite only that** to provide integrated insights.
 \n
 ### CONVERSATION FLOW & ENGAGEMENT (MANDATORY)
 - **Every response must end with a proactive, context-aware follow-up question or suggestion.**
