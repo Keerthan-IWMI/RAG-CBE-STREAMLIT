@@ -353,13 +353,6 @@ def load_custom_css():
     /* Hide Streamlit Elements */
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
-
-    /* Make header bar blend into the background by matching the color. This makes the sidebar appear again.*/
-    header[data-testid="stHeader"] {{
-        background: linear-gradient(180deg, {BACKGROUND_LIGHT} 100%, #ECFDF5 0%, #F0F9FF 10%);
-        border-bottom: none;
-        
-    }}
     
     /* Hide Deploy button */
     .stDeployButton {{
@@ -367,15 +360,15 @@ def load_custom_css():
         visibility: hidden !important;
     }}
     
-    [data-testid="stToolbar"] {{
-        display: none !important;
-        visibility: hidden !important;
-    }}
+    # [data-testid="stToolbar"] {{
+    #     display: none !important;
+    #     visibility: hidden !important;
+    # }}
     
-    /* Hide the entire top-right menu area */
-    header[data-testid="stHeader"] > div:first-child {{
-        display: none !important;
-    }}
+    # /* Hide the entire top-right menu area */
+    # header[data-testid="stHeader"] > div:first-child {{
+    #     display: none !important;
+    # }}
     
     /* Make sure sidebar toggle button is always visible */
     [data-testid="stSidebarNav"] {{
