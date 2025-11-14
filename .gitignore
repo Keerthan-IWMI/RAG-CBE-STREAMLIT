@@ -12,3 +12,6 @@ data/
 
 # Dev container settings
 .devcontainer/
+
+pre_update_streamlit_app.py
+pre_update_rag_pipeline.py
