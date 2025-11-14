@@ -4,14 +4,12 @@ import json
 import os
 from io import BytesIO
 from fpdf import FPDF
-import logging
+
 # Import RAG pipeline
 from rag_pipeline import RAGPipeline
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 # ------------------- CONFIG -------------------
-PDF_FOLDER = "C://Users//M.Asaf//Downloads//Agri PDFs//agri and waste water"
+PDF_FOLDER = "C://iwmi-remote-work//CBE-Chatbot//New folder//cbe//agri and waste water"
 INDEX_FILE = "pdf_index_enhanced.pkl"
 
 AZURE_OPENAI_KEY = st.secrets["azure_api_key"]
@@ -33,6 +31,7 @@ TEXT_PRIMARY = "#0F172A"  # Slate
 TEXT_SECONDARY = "#475569"  # Slate gray
 
 # ------------------- CUSTOM CSS -------------------
+
 def load_custom_css():
     st.markdown(f"""
     <style>
@@ -434,7 +433,6 @@ def load_custom_css():
     }}
     </style>
     """, unsafe_allow_html=True)
-
 # ------------------- SESSION STATE -------------------
 def init_session_state():
     if "messages" not in st.session_state:
@@ -813,6 +811,7 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
     
+    # Chat input
     if prompt := st.chat_input("💬 Ask me about circular bioeconomy, waste management, or sustainable practices..."):
         # Add user message to session state
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -820,44 +819,23 @@ def main():
         # Process with RAG
         with st.spinner("🔍 Analyzing IWMI research documents..."):
             try:
-                # FIX: query() returns 3 values: (answer, references, metadata)
-                answer, references, metadata = rag.query(prompt)
-                
-                # Log relevance scores for debugging
-                if metadata and "relevance_scores" in metadata:
-                    logger.info(f"Query processed with {len(references)} references, "
-                              f"scores: {metadata['relevance_scores']}")
+                answer, references = rag.query(prompt)
                 
                 # Add assistant response to session state
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer,
-                    "references": references,
-                    "metadata": metadata  # Optional: store for debugging
+                    "references": references
                 })
                 st.session_state.total_queries += 1
             
             except Exception as e:
-                import traceback
-                error_details = traceback.format_exc()
-                logger.error(f"Query processing error:\n{error_details}")
-                
-                # User-friendly error message
-                error_msg = (
-                    f"⚠️ **Processing Error**\n\n"
-                    f"I encountered an issue while processing your query: `{str(e)}`\n\n"
-                    f"Please try rephrasing your question or contact support if the issue persists."
-                )
-                
+                error_msg = f"⚠️ **Processing Error**\n\nI encountered an issue while processing your query: `{str(e)}`\n\nPlease try rephrasing your question or contact support if the issue persists."
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": error_msg,
-                    "references": [],
-                    "metadata": {"error": str(e)}
+                    "references": []
                 })
-        
-        # Save conversation after each exchange
-        save_conversation()
         
         # Rerun to display the updated messages
         st.rerun()
