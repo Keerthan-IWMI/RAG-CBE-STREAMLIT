@@ -7,7 +7,7 @@ from fpdf import FPDF
 
 # Import RAG pipeline
 from rag_pipeline import RAGPipeline
-
+from google_auth import check_google_auth  # Import the auth function
 # ------------------- CONFIG -------------------
 PDF_FOLDER = "C://iwmi-remote-work//CBE-Chatbot//New folder//cbe//agri and waste water"
 INDEX_FILE = "pdf_index_enhanced.pkl"
@@ -622,9 +622,27 @@ def main():
         page_icon="🔄",
         initial_sidebar_state="expanded"
     )
-    
+    # 🔐 AUTHENTICATION CHECK - Add this line at the start
+    if not check_google_auth():
+        return  # Stop execution if not authenticated
     load_custom_css()
     init_session_state()
+    # Show user info in sidebar
+    if st.session_state.get("google_authenticated"):
+        user = st.session_state.google_user
+        with st.sidebar:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, #0F766E 0%, #06B6D4 100%); border-radius: 12px; color: white; margin-bottom: 1rem;">
+                <img src="{user['picture']}" width="60" style="border-radius: 50%; border: 3px solid white; margin-bottom: 0.5rem;">
+                <h4 style="margin: 0.5rem 0; color: white;">{user['name']}</h4>
+                <p style="margin: 0; font-size: 0.8rem; opacity: 0.9;">{user['email']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Logout button
+            if st.button("🚪 Logout", use_container_width=True, type="primary"):
+                from google_auth import logout
+                logout()
     
     # Professional loading screen
     if not st.session_state.rag_loaded:
@@ -713,15 +731,7 @@ def main():
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Session Statistics
-        st.markdown('<div class="session-info">', unsafe_allow_html=True)
-        st.markdown("**📊 Session Stats**")
-        st.markdown(f'<div class="stat-box"><span class="stat-label">Session ID</span><span class="stat-value">{st.session_state.conversation_id[:8]}...</span></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="stat-box"><span class="stat-label">Queries</span><span class="stat-value">{st.session_state.total_queries}</span></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="stat-box"><span class="stat-label">Messages</span><span class="stat-value">{len(st.session_state.messages)}</span></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="stat-box"><span class="stat-label">Model</span><span class="stat-value">{st.session_state.model}</span></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
+    
         # About Section
         with st.expander("ℹ️ About CircularIQ"):
             st.markdown("""
