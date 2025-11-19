@@ -20,7 +20,15 @@ class GoogleOAuth:
     def __init__(self):
         self.client_id = st.secrets["client_id"]
         self.client_secret = st.secrets["client_secret"]
-        self.redirect_uri = st.secrets.get("redirect_uri", "http://localhost:8501/oauth2callback")
+        
+        # Detect if running locally or on Streamlit Cloud
+        if "streamlit.app" in st.config.get_option("client.serverAddress"):
+            # Production: Streamlit Cloud
+            self.redirect_uri = "https://rag-cbe-app-test.streamlit.app/oauth2callback"
+        else:
+            # Local development
+            self.redirect_uri = "http://localhost:8501/oauth2callback"
+        
         self.scope = (
             "https://www.googleapis.com/auth/userinfo.email "
             "https://www.googleapis.com/auth/userinfo.profile"
@@ -46,6 +54,9 @@ class GoogleOAuth:
             "grant_type": "authorization_code",
             "redirect_uri": self.redirect_uri,
         }
+        # Debug: Print the redirect_uri being used
+        print(f"DEBUG: Using redirect_uri: {self.redirect_uri}")
+        
         r = requests.post(token_url, data=data)
         if r.status_code == 200:
             tokens = r.json()
@@ -54,6 +65,9 @@ class GoogleOAuth:
             else:
                 tokens['expires_at'] = time.time() + (2 * 60 * 60)
             return tokens
+        
+        # Debug: Print error details
+        print(f"DEBUG: Token error - Status: {r.status_code}, Response: {r.text}")
         st.error(f"Failed to get tokens: {r.text}")
         return None
     
