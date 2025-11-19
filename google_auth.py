@@ -19,15 +19,8 @@ TOKEN_STORAGE_FILE = ".streamlit_auth_tokens.json"
 class GoogleOAuth:
     def __init__(self):
         self.client_id = st.secrets["client_id"]
-        self.client_secret = st.secrets["client_secret"]
-        
-        # Detect if running locally or on Streamlit Cloud
-        if "streamlit.app" in st.config.get_option("client.serverAddress"):
-            # Production: Streamlit Cloud
-            self.redirect_uri = "https://rag-cbe-app-test.streamlit.app/oauth2callback"
-        else:
-            # Local development
-            self.redirect_uri = "http://localhost:8501/oauth2callback"
+        self.client_secret = st.secrets["client_secret"]      
+        self.redirect_uri = st.secrets.get("redirect_uri", "http://localhost:8501/oauth2callback")
         
         self.scope = (
             "https://www.googleapis.com/auth/userinfo.email "
@@ -182,9 +175,16 @@ def check_google_auth():
     google_oauth = GoogleOAuth()
     params = st.query_params
 
+    # DEBUG: Print initialization
+    print(f"🔍 DEBUG - Auth Check Started")
+    print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
+    print(f"   query_params: {params}")
+
     # ========== HANDLE OAUTH CALLBACK ==========
     if "code" in params:
+        print(f"✅ OAuth callback detected - code present in params")
         code = params["code"]
+        print(f"   code: {code[:30]}...")
         
         # Show loading screen
         st.markdown("""
@@ -224,10 +224,16 @@ def check_google_auth():
         """, unsafe_allow_html=True)
         
         # Get tokens
+        print(f"🔄 Exchanging code for tokens...")
         tokens = google_oauth.get_tokens(code)
+        
         if tokens and "access_token" in tokens:
+            print(f"✅ Tokens received, fetching user info...")
             user_info = google_oauth.get_user_info(tokens["access_token"])
+            
             if user_info:
+                print(f"✅ User info received: {user_info.get('email')}")
+                
                 # Store in session state
                 st.session_state.google_authenticated = True
                 st.session_state.google_user = user_info
@@ -240,38 +246,48 @@ def check_google_auth():
                     st.session_state.token_expires_at = tokens['expires_at']
                 
                 # Save to persistent file
+                print(f"💾 Saving tokens to file...")
                 save_tokens_to_file(tokens, user_info)
                 
-                # ⭐ MOST IMPORTANT: Clear query params FIRST
+                # Clear query params
+                print(f"🧹 Clearing query params...")
                 st.query_params.clear()
                 
-                # ⭐ Then navigate with Streamlit switch_page (better than JavaScript)
+                # Redirect
+                print(f"🔄 Redirecting to homepage...")
                 st.markdown("""
                 <script>
-                // Force redirect to clean URL
                 window.location.replace(window.location.origin + window.location.pathname);
                 </script>
                 """, unsafe_allow_html=True)
                 
-                # Trigger rerun
                 st.rerun()
                 return True
+            else:
+                print(f"❌ Failed to get user info")
+        else:
+            print(f"❌ Failed to exchange code for tokens")
         
         st.error("❌ Authentication failed. Please try again.")
         return False
 
     # ========== CHECK SESSION STATE ==========
     if st.session_state.get("google_authenticated"):
+        print(f"✅ User already in session state")
         session_start = st.session_state.get("session_start_time")
         if session_start and (time.time() - session_start) < (2 * 60 * 60):
+            print(f"✅ Session still valid")
             return True
         else:
+            print(f"⏰ Session expired - logging out")
             logout()
             return False
 
     # ========== CHECK PERSISTENT STORAGE ==========
+    print(f"🔍 Checking persistent storage...")
     stored_auth = load_tokens_from_file()
     if stored_auth:
+        print(f"✅ Found stored tokens - restoring...")
         tokens = stored_auth["tokens"]
         user_info = stored_auth["user_info"]
         
@@ -286,11 +302,14 @@ def check_google_auth():
         if 'expires_at' in tokens:
             st.session_state.token_expires_at = tokens['expires_at']
         
+        print(f"✅ Restored from storage")
         return True
 
     # ========== SHOW LOGIN PAGE ==========
+    print(f"📝 No authentication found - showing login page")
     if not st.session_state.get("google_authenticated"):
         auth_url = google_oauth.get_authorization_url()
+        print(f"   Auth URL: {auth_url[:100]}...")
         show_login_page(auth_url)
         return False
 
