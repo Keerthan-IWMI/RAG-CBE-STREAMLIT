@@ -19,7 +19,7 @@ TOKEN_STORAGE_FILE = ".streamlit_auth_tokens.json"
 class GoogleOAuth:
     def __init__(self):
         self.client_id = st.secrets["client_id"]
-        self.client_secret = st.secrets["client_secret"]      
+        self.client_secret = st.secrets["client_secret"]
         self.redirect_uri = st.secrets.get("redirect_uri", "http://localhost:8501/oauth2callback")
         
         self.scope = (

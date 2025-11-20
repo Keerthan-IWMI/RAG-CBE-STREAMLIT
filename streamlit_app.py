@@ -4,10 +4,12 @@ import json
 import os
 from io import BytesIO
 from fpdf import FPDF
+import hashlib
 
 # Import RAG pipeline
 from rag_pipeline import RAGPipeline
 from google_auth import check_google_auth  # Import the auth function
+
 # ------------------- CONFIG -------------------
 PDF_FOLDER = "C://iwmi-remote-work//CBE-Chatbot//New folder//cbe//agri and waste water"
 INDEX_FILE = "pdf_index_enhanced.pkl"
@@ -20,15 +22,96 @@ HF_TOKEN = st.secrets["hf_token"]
 DEEPSEEK_API_URL = "https://router.huggingface.co/v1/chat/completions"
 DEEPSEEK_MODEL_NAME = "deepseek-ai/DeepSeek-V3.1:novita"
 
-CONVERSATION_HISTORY_FILE = "conversation_history.json"
+CHAT_HISTORY_DIR = "chat_histories"
 
-# Professional Color Palette (Modern Blue-Green Scheme)
+# Professional Color Palette
 PRIMARY_COLOR = "#0F766E"  # Teal
 SECONDARY_COLOR = "#06B6D4"  # Cyan
 ACCENT_COLOR = "#10B981"  # Emerald
 BACKGROUND_LIGHT = "#F0FDFA"  # Light teal
 TEXT_PRIMARY = "#0F172A"  # Slate
 TEXT_SECONDARY = "#475569"  # Slate gray
+
+# =============== CHAT HISTORY MANAGEMENT ===============
+
+def get_chat_history_file(email: str) -> str:
+    """Generate chat history file path based on user email"""
+    if not os.path.exists(CHAT_HISTORY_DIR):
+        os.makedirs(CHAT_HISTORY_DIR)
+    
+    # Create a safe filename from email
+    safe_email = hashlib.md5(email.encode()).hexdigest()
+    return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_chat.json")
+
+def save_chat_history(email: str, messages: list, total_queries: int, model: str):
+    """Save chat history to JSON file for specific user"""
+    try:
+        file_path = get_chat_history_file(email)
+        
+        # Convert messages to JSON-serializable format
+        serializable_messages = []
+        for msg in messages:
+            msg_copy = {
+                "role": msg["role"],
+                "content": msg["content"]
+            }
+            
+            # Convert Document objects to dictionaries
+            if "references" in msg and msg["references"]:
+                msg_copy["references"] = [
+                    {
+                        "page_content": doc.page_content,
+                        "metadata": doc.metadata
+                    }
+                    for doc in msg["references"]
+                ]
+            else:
+                msg_copy["references"] = []
+            
+            serializable_messages.append(msg_copy)
+        
+        chat_data = {
+            "user_email": email,
+            "timestamp": datetime.now().isoformat(),
+            "messages": serializable_messages,
+            "total_queries": total_queries,
+            "model": model
+        }
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(chat_data, f, indent=2, ensure_ascii=False)
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ Failed to save chat history: {e}")
+        return False
+
+def load_chat_history(email: str) -> dict:
+    """Load chat history from JSON file for specific user"""
+    try:
+        file_path = get_chat_history_file(email)
+        
+        if not os.path.exists(file_path):
+            return None
+        
+        with open(file_path, "r", encoding="utf-8") as f:
+            chat_data = json.load(f)
+        
+        return chat_data
+    except Exception as e:
+        print(f"Error loading chat history: {e}")
+        return None
+
+def delete_chat_history(email: str) -> bool:
+    """Delete chat history for specific user"""
+    try:
+        file_path = get_chat_history_file(email)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return True
+    except Exception as e:
+        print(f"Error deleting chat history: {e}")
+        return False
 
 # ------------------- CUSTOM CSS -------------------
 
@@ -205,7 +288,7 @@ def load_custom_css():
     }}
     
     [data-testid="stSidebar"] > div:first-child {{
-        padding-top: 2rem;
+        padding-top: 1.5rem;
     }}
     
     .sidebar-title {{
@@ -220,9 +303,9 @@ def load_custom_css():
     
     .sidebar-section {{
         background: white;
-        padding: 1rem;
-        border-radius: 12px;
-        margin-bottom: 1rem;
+        padding: 0.75rem;
+        border-radius: 10px;
+        margin-bottom: 0.75rem;
         border: 1px solid #E2E8F0;
     }}
     
@@ -232,10 +315,10 @@ def load_custom_css():
         background: linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%);
         color: white;
         border: none;
-        padding: 0.65rem 1rem;
+        padding: 0.6rem 1rem;
         border-radius: 10px;
         font-weight: 600;
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         transition: all 0.3s ease;
         box-shadow: 0 4px 12px rgba(15, 118, 110, 0.2);
     }}
@@ -250,10 +333,10 @@ def load_custom_css():
         background: white;
         color: {PRIMARY_COLOR};
         border: 2px solid {PRIMARY_COLOR};
-        padding: 0.65rem 1rem;
+        padding: 0.6rem 1rem;
         border-radius: 10px;
         font-weight: 600;
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         transition: all 0.3s ease;
     }}
     
@@ -353,23 +436,11 @@ def load_custom_css():
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
     
-    /* Hide Deploy button */
     .stDeployButton {{
         display: none !important;
         visibility: hidden !important;
     }}
     
-    # [data-testid="stToolbar"] {{
-    #     display: none !important;
-    #     visibility: hidden !important;
-    # }}
-    
-    # /* Hide the entire top-right menu area */
-    # header[data-testid="stHeader"] > div:first-child {{
-    #     display: none !important;
-    # }}
-    
-    /* Make sure sidebar toggle button is always visible */
     [data-testid="stSidebarNav"] {{
         display: block !important;
     }}
@@ -379,7 +450,6 @@ def load_custom_css():
         visibility: visible !important;
     }}
     
-    /* Sidebar collapse button styling */
     [data-testid="collapsedControl"] {{
         display: flex !important;
         visibility: visible !important;
@@ -398,7 +468,6 @@ def load_custom_css():
         box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3) !important;
     }}
     
-    /* Ensure the header area shows the toggle */
     header {{
         visibility: visible !important;
     }}
@@ -407,7 +476,6 @@ def load_custom_css():
         background-color: transparent !important;
     }}
     
-    /* Sidebar open/close button */
     section[data-testid="stSidebar"] button[kind="header"] {{
         color: {PRIMARY_COLOR} !important;
     }}
@@ -431,14 +499,139 @@ def load_custom_css():
     ::-webkit-scrollbar-thumb:hover {{
         background: {SECONDARY_COLOR};
     }}
+    
+    /* Profile Card Styling - Google-like */
+    .profile-card {{
+        background: linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%);
+        border-radius: 16px;
+        padding: 1.25rem;
+        margin-bottom: 1.5rem;
+        text-align: center;
+        box-shadow: 0 8px 24px rgba(15, 118, 110, 0.2);
+        position: relative;
+        overflow: hidden;
+    }}
+    
+    .profile-card::before {{
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+        animation: shimmer 3s infinite;
+    }}
+    
+    @keyframes shimmer {{
+        0% {{ left: -100%; }}
+        100% {{ left: 100%; }}
+    }}
+    
+    .profile-image-wrapper {{
+        position: relative;
+        width: 70px;
+        height: 70px;
+        margin: 0 auto 0.75rem;
+        border: 3px solid white;
+        border-radius: 50%;
+        overflow: hidden;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        background: linear-gradient(135deg, #E0F2FE 0%, #BAE6FD 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }}
+    
+    .profile-initial {{
+        font-size: 2rem;
+        font-weight: 600;
+        color: {PRIMARY_COLOR};
+        text-transform: uppercase;
+        user-select: none;
+    }}
+    
+    .profile-image {{
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }}
+    
+    .profile-info h3 {{
+        margin: 0.5rem 0 0.25rem 0;
+        color: white;
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: -0.3px;
+    }}
+    
+    .profile-info p {{
+        margin: 0 0 0.75rem 0;
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 0.75rem;
+        font-weight: 500;
+        word-break: break-all;
+    }}
+    
+    /* Logout Button Styling */
+    div[data-testid="stVerticalBlock"] > div:has(button[key="logout_btn"]) {{
+        margin-top: -0.75rem !important;
+    }}
+    
+    button[key="logout_btn"] {{
+        width: 100%;
+        background: rgba(255, 255, 255, 0.95) !important;
+        color: {PRIMARY_COLOR} !important;
+        border: none !important;
+        padding: 0.5rem 0.75rem !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 0.8rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: none !important;
+        font-family: 'Inter', sans-serif !important;
+    }}
+    
+    button[key="logout_btn"]:hover {{
+        background: white !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    }}
+    
+    button[key="logout_btn"]:active {{
+        transform: translateY(0) !important;
+    }}
+    
+    /* Sidebar Divider */
+    .sidebar-divider {{
+        height: 1px;
+        background: linear-gradient(90deg, transparent, #E2E8F0, transparent);
+        margin: 0.5rem 0;
+        border: none;
+    }}
+    
+    .control-panel-header {{
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: {TEXT_SECONDARY};
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        padding: 0.5rem 0 0.35rem 0;
+        margin: 0;
+    }}
+    
+    .section-content {{
+        margin-bottom: 0.5rem;
+    }}
     </style>
     """, unsafe_allow_html=True)
+
 # ------------------- SESSION STATE -------------------
+
 def init_session_state():
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "conversation_id" not in st.session_state:
-        st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     if "total_queries" not in st.session_state:
         st.session_state.total_queries = 0
     if "model" not in st.session_state:
@@ -449,6 +642,7 @@ def init_session_state():
         st.session_state.is_switching = False
 
 # ------------------- RAG PIPELINE -------------------
+
 @st.cache_resource(show_spinner=False)
 def get_rag_pipeline(selected_model: str):
     params = {}
@@ -473,59 +667,15 @@ def get_rag_pipeline(selected_model: str):
     )
 
 # ------------------- HELPER FUNCTIONS -------------------
-def save_conversation():
-    """Save conversation to JSON file"""
-    try:
-        # Convert messages to JSON-serializable format
-        serializable_messages = []
-        for msg in st.session_state.messages:
-            msg_copy = {
-                "role": msg["role"],
-                "content": msg["content"]
-            }
-            
-            # Convert Document objects to dictionaries
-            if "references" in msg and msg["references"]:
-                msg_copy["references"] = [
-                    {
-                        "page_content": doc.page_content,
-                        "metadata": doc.metadata
-                    }
-                    for doc in msg["references"]
-                ]
-            else:
-                msg_copy["references"] = []
-            
-            serializable_messages.append(msg_copy)
-        
-        conversation_data = {
-            "id": st.session_state.conversation_id,
-            "timestamp": datetime.now().isoformat(),
-            "messages": serializable_messages,
-            "total_queries": st.session_state.total_queries,
-            "model": st.session_state.model
-        }
-        
-        if os.path.exists(CONVERSATION_HISTORY_FILE):
-            with open(CONVERSATION_HISTORY_FILE, "r", encoding="utf-8") as f:
-                all_conversations = json.load(f)
-        else:
-            all_conversations = []
-        
-        all_conversations = [c for c in all_conversations if c["id"] != st.session_state.conversation_id]
-        all_conversations.append(conversation_data)
-        
-        with open(CONVERSATION_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(all_conversations, f, indent=2, ensure_ascii=False)
-        
-        return True
-    except Exception as e:
-        st.error(f"❌ Failed to save conversation: {e}")
-        return False
+
+def get_user_initial(name: str) -> str:
+    """Get the first letter of the user's name"""
+    if name:
+        return name[0].upper()
+    return "U"
 
 def clean_text_for_pdf(text):
     """Clean text to remove problematic characters for latin-1 encoding"""
-    # Replace smart quotes and other unicode characters
     replacements = {
         '\u201c': '"',  # Left double quotation mark
         '\u201d': '"',  # Right double quotation mark
@@ -541,7 +691,6 @@ def clean_text_for_pdf(text):
     for old, new in replacements.items():
         text = text.replace(old, new)
     
-    # Remove any remaining non-latin1 characters
     return text.encode('latin-1', errors='ignore').decode('latin-1')
 
 def export_conversation_pdf():
@@ -560,7 +709,7 @@ def export_conversation_pdf():
         # Metadata
         pdf.set_font('Arial', '', 10)
         pdf.set_text_color(71, 85, 105)
-        pdf.cell(0, 6, f'Session ID: {st.session_state.conversation_id}', 0, 1)
+        pdf.cell(0, 6, f'User: {st.session_state.get("user_email", "Unknown")}', 0, 1)
         pdf.cell(0, 6, f'Date: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}', 0, 1)
         pdf.cell(0, 6, f'Model: {st.session_state.model}', 0, 1)
         pdf.cell(0, 6, f'Total Queries: {st.session_state.total_queries}', 0, 1)
@@ -587,10 +736,15 @@ def export_conversation_pdf():
                 pdf.set_text_color(71, 85, 105)
                 pdf.cell(0, 6, f'Sources: {len(msg["references"])} documents referenced', 0, 1)
                 
-                # Add reference details
-                for j, doc in enumerate(msg["references"][:3], 1):  # Limit to first 3 references
-                    src = clean_text_for_pdf(doc.metadata.get("source", "Unknown"))
-                    page = doc.metadata.get("page", "?")
+                for j, doc in enumerate(msg["references"][:3], 1):
+                    # Handle both dict and Document objects
+                    if isinstance(doc, dict):
+                        src = clean_text_for_pdf(doc.get("metadata", {}).get("source", "Unknown"))
+                        page = doc.get("metadata", {}).get("page", "?")
+                    else:
+                        src = clean_text_for_pdf(doc.metadata.get("source", "Unknown"))
+                        page = doc.metadata.get("page", "?")
+                    
                     pdf.set_font('Arial', '', 8)
                     pdf.cell(0, 5, f'  {j}. {src} (Page {page})', 0, 1)
                 
@@ -615,6 +769,7 @@ def export_conversation_pdf():
         return None
 
 # ------------------- MAIN APP -------------------
+
 def main():
     st.set_page_config(
         page_title="CircularIQ - CBE Decision Support",
@@ -622,25 +777,54 @@ def main():
         page_icon="🔄",
         initial_sidebar_state="expanded"
     )
-    # 🔐 AUTHENTICATION CHECK - Add this line at the start
+    
+    # 🔐 AUTHENTICATION CHECK
     if not check_google_auth():
-        return  # Stop execution if not authenticated
+        return
+    
     load_custom_css()
     init_session_state()
+    
+    # Get user email
+    user_email = st.session_state.google_user.get("email")
+    st.session_state.user_email = user_email
+    
+    # Load chat history from file on first run
+    if "chat_loaded" not in st.session_state:
+        chat_data = load_chat_history(user_email)
+        if chat_data:
+            st.session_state.messages = chat_data.get("messages", [])
+            st.session_state.total_queries = chat_data.get("total_queries", 0)
+            st.session_state.model = chat_data.get("model", "DeepSeek")
+        st.session_state.chat_loaded = True
+    
     # Show user info in sidebar
     if st.session_state.get("google_authenticated"):
         user = st.session_state.google_user
+        user_name = user.get('name', 'User')
+        user_initial = get_user_initial(user_name)
+        
         with st.sidebar:
             st.markdown(f"""
-            <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, #0F766E 0%, #06B6D4 100%); border-radius: 12px; color: white; margin-bottom: 1rem;">
-                <img src="{user['picture']}" width="60" style="border-radius: 50%; border: 3px solid white; margin-bottom: 0.5rem;">
-                <h4 style="margin: 0.5rem 0; color: white;">{user['name']}</h4>
-                <p style="margin: 0; font-size: 0.8rem; opacity: 0.9;">{user['email']}</p>
+            <div class="profile-card">
+                <div class="profile-image-wrapper">
+                    <img src="{user['picture']}" 
+                         alt="{user_name}" 
+                         class="profile-image" 
+                         loading="lazy" 
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    <div class="profile-initial" style="display: none;">{user_initial}</div>
+                </div>
+                <div class="profile-info">
+                    <h3>{user_name}</h3>
+                    <p>{user['email']}</p>
+                </div>
             </div>
             """, unsafe_allow_html=True)
             
-            # Logout button
-            if st.button("🚪 Logout", use_container_width=True, type="primary"):
+            # Actual Streamlit logout button
+            if st.button("↗️ Sign Out", key="logout_btn", use_container_width=True):
+                # Import logout function
                 from google_auth import logout
                 logout()
     
@@ -661,11 +845,38 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.markdown('<div class="sidebar-title">⚙️ Control Panel</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <style>
+        .sidebar-divider {{
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #E2E8F0, transparent);
+            margin: 0.5rem 0;
+            border: none;
+        }}
         
-        # Model Selection
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.markdown("**🤖 AI Model**")
+        .control-panel-header {{
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: {TEXT_SECONDARY};
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            padding: 0.5rem 0 0.35rem 0;
+            margin: 0;
+        }}
+        
+        .section-content {{
+            margin-bottom: 0.5rem;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Divider after profile
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+        
+        st.markdown('<h4 class="control-panel-header">AI Model</h4>', unsafe_allow_html=True)
+        
+        # Model Selection - without section box
+        st.markdown('<div class="section-content">', unsafe_allow_html=True)
         selected_model = st.selectbox(
             "Select AI Engine",
             ["DeepSeek", "GPT-4o-mini"],
@@ -679,17 +890,21 @@ def main():
             st.session_state.model = selected_model
             st.session_state.messages = []
             st.session_state.total_queries = 0
-            st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
             st.session_state.rag_loaded = False
             st.session_state.is_switching = True
+            # Save empty chat
+            save_chat_history(user_email, [], 0, selected_model)
             st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Chat Management
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.markdown("**🔧 Chat Management**")
+        # Divider
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
         
+        st.markdown('<h4 class="control-panel-header">Chat Management</h4>', unsafe_allow_html=True)
+        
+        # Chat Management - without section box
+        st.markdown('<div class="section-content">', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         
         with col1:
@@ -697,7 +912,8 @@ def main():
                 st.session_state.rag.clear_conversation()
                 st.session_state.messages = []
                 st.session_state.total_queries = 0
-                st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Save to file
+                save_chat_history(user_email, [], 0, st.session_state.model)
                 st.toast("✨ New conversation started!", icon="🎉")
                 st.rerun()
         
@@ -707,6 +923,8 @@ def main():
                     st.session_state.rag.clear_conversation() 
                     st.session_state.messages = []
                     st.session_state.total_queries = 0
+                    # Save to file
+                    save_chat_history(user_email, [], 0, st.session_state.model)
                     st.toast("🧹 Chat cleared!", icon="✅")
                     st.rerun()
                 else:
@@ -714,16 +932,20 @@ def main():
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Export Option
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.markdown("**💾 Export Chat**")
+        # Divider
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+        
+        st.markdown('<h4 class="control-panel-header">Export Chat</h4>', unsafe_allow_html=True)
+        
+        # Export Option - without section box
+        st.markdown('<div class="section-content">', unsafe_allow_html=True)
         
         pdf_content = export_conversation_pdf()
         if pdf_content:
             st.download_button(
                 label="📕 Download PDF",
                 data=pdf_content,
-                file_name=f"CircularIQ_{st.session_state.conversation_id}.pdf",
+                file_name=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 help="Download conversation as PDF"
@@ -731,7 +953,9 @@ def main():
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-    
+        # Divider
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+        
         # About Section
         with st.expander("ℹ️ About CircularIQ"):
             st.markdown("""
@@ -795,9 +1019,9 @@ def main():
             if "references" in message and message["references"]:
                 with st.expander(f"📚 View {len(message['references'])} Source Documents"):
                     for i, doc in enumerate(message["references"], 1):
-                        src = doc.metadata.get("source", "Unknown")
-                        page = doc.metadata.get("page", "?")
-                        doc_type = doc.metadata.get("type", "text")
+                        src = doc.get("metadata", {}).get("source", "Unknown") if isinstance(doc, dict) else doc.metadata.get("source", "Unknown")
+                        page = doc.get("metadata", {}).get("page", "?") if isinstance(doc, dict) else doc.metadata.get("page", "?")
+                        doc_type = doc.get("metadata", {}).get("type", "text") if isinstance(doc, dict) else doc.metadata.get("type", "text")
                         
                         type_badge = ""
                         badge_class = ""
@@ -811,13 +1035,15 @@ def main():
                             type_badge = "📄 TEXT"
                             badge_class = "badge-text"
                         
+                        content = doc.get("page_content", "") if isinstance(doc, dict) else doc.page_content
+                        
                         st.markdown(f"""
                         <div class="reference-card">
                             <div class="reference-header">
                                 <span>{i}. {src} (Page {page})</span>
                                 <span class="reference-badge {badge_class}">{type_badge}</span>
                             </div>
-                            <div class="reference-content">{doc.page_content[:300]}...</div>
+                            <div class="reference-content">{content[:300]}...</div>
                         </div>
                         """, unsafe_allow_html=True)
     
@@ -846,6 +1072,9 @@ def main():
                     "content": error_msg,
                     "references": []
                 })
+        
+        # Save chat history to file after each message
+        save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
         
         # Rerun to display the updated messages
         st.rerun()
