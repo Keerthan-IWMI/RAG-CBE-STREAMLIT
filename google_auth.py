@@ -4,18 +4,44 @@ from urllib.parse import urlencode
 import time
 import json
 import os
+import hashlib
 
-# Color palette - YOUR ORIGINAL COLORS
-PRIMARY_COLOR = "#0F766E"      # Teal
-SECONDARY_COLOR = "#06B6D4"    # Cyan
-ACCENT_COLOR = "#10B981"       # Emerald
-BACKGROUND_LIGHT = "#F0FDFA"   # Light teal
-TEXT_PRIMARY = "#0F172A"       # Slate
-TEXT_SECONDARY = "#475569"     # Slate gray
+# Color palette
+PRIMARY_COLOR = "#0F766E"
+SECONDARY_COLOR = "#06B6D4"
+ACCENT_COLOR = "#10B981"
+BACKGROUND_LIGHT = "#F0FDFA"
+TEXT_PRIMARY = "#0F172A"
+TEXT_SECONDARY = "#475569"
 
-# File to store tokens persistently for ALL users
 TOKEN_STORAGE_FILE = ".streamlit_auth_tokens_user.json"
+BROWSER_ID_FILE = ".streamlit_browser_id.txt"
 
+# ==================== BROWSER IDENTIFIER ====================
+def get_browser_identifier():
+    """
+    Generate and store a persistent browser identifier.
+    This survives page refreshes and identifies the device/browser.
+    """
+    if os.path.exists(BROWSER_ID_FILE):
+        try:
+            with open(BROWSER_ID_FILE, "r") as f:
+                return f.read().strip()
+        except:
+            pass
+    
+    # Generate new browser ID if not exists
+    import uuid
+    browser_id = str(uuid.uuid4())
+    try:
+        with open(BROWSER_ID_FILE, "w") as f:
+            f.write(browser_id)
+    except:
+        pass
+    
+    return browser_id
+
+# ==================== GOOGLE OAUTH CLASS ====================
 class GoogleOAuth:
     def __init__(self):
         self.client_id = st.secrets["client_id"]
@@ -89,7 +115,7 @@ class GoogleOAuth:
 
 # ==================== MULTI-USER STORAGE FUNCTIONS ====================
 
-def save_tokens_to_file(tokens, user_info):
+def save_tokens_to_file(tokens, user_info, browser_id):
     """Save tokens and user info to JSON file using email as key"""
     try:
         user_email = user_info.get('email')
@@ -97,36 +123,30 @@ def save_tokens_to_file(tokens, user_info):
             print("❌ No email found in user info")
             return False
         
-        # Load existing data with robust error handling
         all_users_data = {}
         if os.path.exists(TOKEN_STORAGE_FILE):
             try:
                 with open(TOKEN_STORAGE_FILE, "r") as f:
                     all_users_data = json.load(f)
-                # Validate structure is dict
                 if not isinstance(all_users_data, dict):
-                    print("⚠️ Invalid JSON structure, resetting...")
                     all_users_data = {}
-            except (json.JSONDecodeError, Exception) as e:
-                print(f"⚠️ Corrupted JSON file, resetting: {e}")
+            except:
                 all_users_data = {}
         
-        # Prepare user data
         user_data = {
             "tokens": tokens,
             "user_info": user_info,
+            "browser_id": browser_id,
             "saved_at": time.time(),
             "last_accessed": time.time()
         }
         
-        # Update or add user data
         all_users_data[user_email] = user_data
         
-        # Save back to file
         with open(TOKEN_STORAGE_FILE, "w") as f:
             json.dump(all_users_data, f, indent=2)
         
-        print(f"✅ Saved tokens for user: {user_email}")
+        print(f"✅ Saved tokens for user: {user_email} on browser: {browser_id[:8]}")
         return True
         
     except Exception as e:
@@ -136,39 +156,27 @@ def save_tokens_to_file(tokens, user_info):
 def load_tokens_from_file(user_email):
     """Load tokens for specific user from multi-user JSON file"""
     try:
-        if not user_email:
-            return None
-            
-        if not os.path.exists(TOKEN_STORAGE_FILE):
+        if not user_email or not os.path.exists(TOKEN_STORAGE_FILE):
             return None
         
-        # Load with error handling for corrupted files
         try:
             with open(TOKEN_STORAGE_FILE, "r") as f:
                 all_users_data = json.load(f)
-            
-            # Validate structure
             if not isinstance(all_users_data, dict):
-                print("⚠️ Invalid JSON structure in token file")
                 return None
-                
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"⚠️ Corrupted token file: {e}")
+        except:
             return None
         
-        # Load specific user
         if user_email in all_users_data:
             user_data = all_users_data[user_email]
             tokens = user_data.get("tokens")
             user_info = user_data.get("user_info")
             
             if validate_user_session(tokens, user_info):
-                # Update last accessed time
                 user_data["last_accessed"] = time.time()
                 save_all_users_data(all_users_data)
                 return {"tokens": tokens, "user_info": user_info}
             else:
-                # Remove expired/invalid session
                 del all_users_data[user_email]
                 save_all_users_data(all_users_data)
         
@@ -183,14 +191,11 @@ def validate_user_session(tokens, user_info):
     if not tokens or not user_info:
         return False
     
-    # Check if tokens and user_info are proper dictionaries
     if not isinstance(tokens, dict) or not isinstance(user_info, dict):
         return False
     
-    # Check token expiration
     expires_at = tokens.get("expires_at")
     if expires_at and time.time() > expires_at:
-        # Try to refresh token
         google_oauth = GoogleOAuth()
         refresh_token = tokens.get("refresh_token")
         
@@ -198,7 +203,7 @@ def validate_user_session(tokens, user_info):
             new_tokens = google_oauth.refresh_access_token(refresh_token)
             if new_tokens:
                 new_tokens['refresh_token'] = refresh_token
-                save_tokens_to_file(new_tokens, user_info)
+                save_tokens_to_file(new_tokens, user_info, "")
                 return True
         return False
     
@@ -214,60 +219,18 @@ def save_all_users_data(all_users_data):
         print(f"Error saving all users data: {e}")
         return False
 
-def delete_tokens_from_file(user_email=None):
-    """Delete stored tokens for specific user or current user"""
-    try:
-        if not os.path.exists(TOKEN_STORAGE_FILE):
-            return True
-            
-        # Load with error handling
-        try:
-            with open(TOKEN_STORAGE_FILE, "r") as f:
-                all_users_data = json.load(f)
-            
-            if not isinstance(all_users_data, dict):
-                print("⚠️ Invalid structure in delete operation")
-                return False
-                
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"⚠️ Corrupted file during delete: {e}")
-            return False
-            
-        # If no user_email provided, use current session user
-        if not user_email and st.session_state.get('google_user'):
-            user_email = st.session_state.google_user.get('email')
-        
-        if not user_email:
-            return False
-        
-        # Delete specific user
-        if user_email in all_users_data:
-            del all_users_data[user_email]
-            with open(TOKEN_STORAGE_FILE, "w") as f:
-                json.dump(all_users_data, f, indent=2)
-            print(f"✅ Deleted tokens for user: {user_email}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error deleting tokens: {e}")
-        return False
-
 def get_all_stored_users():
-    """Get list of all users with stored sessions (for admin/debug purposes)"""
+    """Get list of all users with stored sessions"""
     try:
         if not os.path.exists(TOKEN_STORAGE_FILE):
             return []
         
-        # Load with error handling
         try:    
             with open(TOKEN_STORAGE_FILE, "r") as f:
                 all_users_data = json.load(f)
-            
             if not isinstance(all_users_data, dict):
                 return []
-                
-        except (json.JSONDecodeError, Exception):
+        except:
             return []
         
         return list(all_users_data.keys())
@@ -275,7 +238,58 @@ def get_all_stored_users():
         print(f"Error getting stored users: {e}")
         return []
 
-# ==================== UPDATED AUTH FUNCTIONS ====================
+def find_user_by_browser(browser_id):
+    """Find which user is logged in on this browser"""
+    try:
+        if not os.path.exists(TOKEN_STORAGE_FILE):
+            return None
+        
+        try:
+            with open(TOKEN_STORAGE_FILE, "r") as f:
+                all_users_data = json.load(f)
+        except:
+            return None
+        
+        for user_email, user_data in all_users_data.items():
+            if user_data.get("browser_id") == browser_id:
+                return user_email
+        
+        return None
+    except:
+        return None
+
+def delete_tokens_from_file(user_email=None):
+    """Delete stored tokens for specific user"""
+    try:
+        if not os.path.exists(TOKEN_STORAGE_FILE):
+            return True
+        
+        try:
+            with open(TOKEN_STORAGE_FILE, "r") as f:
+                all_users_data = json.load(f)
+            if not isinstance(all_users_data, dict):
+                return False
+        except:
+            return False
+        
+        if not user_email and st.session_state.get('google_user'):
+            user_email = st.session_state.google_user.get('email')
+        
+        if not user_email:
+            return False
+        
+        if user_email in all_users_data:
+            del all_users_data[user_email]
+            with open(TOKEN_STORAGE_FILE, "w") as f:
+                json.dump(all_users_data, f, indent=2)
+            print(f"✅ Deleted tokens for user: {user_email}")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Error deleting tokens: {e}")
+        return False
+
+# ==================== AUTH FUNCTIONS ====================
 
 def logout():
     """Enhanced logout - clear session and remove user from storage"""
@@ -293,26 +307,63 @@ def logout():
         if key in st.session_state:
             del st.session_state[key]
     
-    # Remove from storage
     if user_email:
         delete_tokens_from_file(user_email)
     
     st.rerun()
 
+def restore_session_from_storage(browser_id):
+    """
+    ✅ FIXED: Restore user session from file without depending on session_state
+    This is called on every page load/refresh
+    """
+    print(f"🔍 Attempting to restore session for browser: {browser_id[:8]}")
+    
+    # Step 1: Try to find user by browser ID
+    user_email = find_user_by_browser(browser_id)
+    
+    if user_email:
+        print(f"   Found user by browser ID: {user_email}")
+        stored_auth = load_tokens_from_file(user_email)
+        
+        if stored_auth:
+            tokens = stored_auth["tokens"]
+            user_info = stored_auth["user_info"]
+            
+            print(f"✅ Successfully restored session for: {user_email}")
+            
+            # Restore to session state
+            st.session_state.google_authenticated = True
+            st.session_state.google_user = user_info
+            st.session_state.google_access_token = tokens.get("access_token")
+            st.session_state.session_start_time = time.time()
+            st.session_state.current_user_email = user_email
+            
+            if 'refresh_token' in tokens:
+                st.session_state.google_refresh_token = tokens['refresh_token']
+            if 'expires_at' in tokens:
+                st.session_state.token_expires_at = tokens['expires_at']
+            
+            return True
+    
+    print(f"   No valid session found for this browser")
+    return False
+
 def check_google_auth():
-    """Check if user is authenticated with Google - with multi-user storage"""
+    """Check if user is authenticated with Google - FIXED VERSION"""
     google_oauth = GoogleOAuth()
     params = st.query_params
+    browser_id = get_browser_identifier()
 
-    print(f"🔍 DEBUG - Auth Check Started")
-    print(f"   redirect_uri: {google_oauth.redirect_uri}")
+    print(f"\n{'='*60}")
+    print(f"🔐 AUTH CHECK - Browser: {browser_id[:8]}")
+    print(f"{'='*60}")
 
-    # ========== HANDLE OAUTH CALLBACK ==========
+    # ========== STEP 1: HANDLE OAUTH CALLBACK ==========
     if "code" in params:
-        print(f"✅ OAuth callback detected")
+        print(f"✅ OAuth callback detected - code received")
         code = params["code"]
         
-        # Show loading screen
         st.markdown(f"""
         <style>
         .auth-loading {{
@@ -349,7 +400,6 @@ def check_google_auth():
         </div>
         """, unsafe_allow_html=True)
         
-        # Get tokens
         tokens = google_oauth.get_tokens(code)
         
         if tokens and "access_token" in tokens:
@@ -357,9 +407,8 @@ def check_google_auth():
             
             if user_info:
                 user_email = user_info.get('email')
-                print(f"✅ User authenticated: {user_email}")
+                print(f"   ✅ User authenticated: {user_email}")
                 
-                # Store in session state
                 st.session_state.google_authenticated = True
                 st.session_state.google_user = user_info
                 st.session_state.google_access_token = tokens["access_token"]
@@ -371,10 +420,9 @@ def check_google_auth():
                 if 'expires_at' in tokens:
                     st.session_state.token_expires_at = tokens['expires_at']
                 
-                # Save to multi-user storage
-                save_tokens_to_file(tokens, user_info)
+                # ✅ SAVE WITH BROWSER ID
+                save_tokens_to_file(tokens, user_info, browser_id)
                 
-                # Clear query params and redirect
                 st.query_params.clear()
                 st.rerun()
                 return True
@@ -382,56 +430,32 @@ def check_google_auth():
         st.error("❌ Authentication failed. Please try again.")
         return False
 
-    # ========== CHECK SESSION STATE ==========
+    # ========== STEP 2: CHECK SESSION STATE (FAST PATH) ==========
     if st.session_state.get("google_authenticated"):
-        current_user_email = st.session_state.get("current_user_email")
         session_start = st.session_state.get("session_start_time")
+        current_user = st.session_state.get("current_user_email")
         
         if session_start and (time.time() - session_start) < (2 * 60 * 60):
-            print(f"✅ Valid session for: {current_user_email}")
+            print(f"✅ Valid in-memory session for: {current_user}")
             return True
         else:
-            print(f"⏰ Session expired - logging out")
+            print(f"⏰ Session expired")
             logout()
             return False
 
-    # ========== CHECK PERSISTENT STORAGE ==========
+    # ========== STEP 3: RESTORE FROM PERSISTENT STORAGE ✅ FIXED ==========
     print(f"🔍 Checking persistent storage...")
+    if restore_session_from_storage(browser_id):
+        return True
     
-    # 🎯 FIXED: Check if current user has valid tokens in storage
-    current_user_email = st.session_state.get("current_user_email")
-    
-    if current_user_email:
-        # Check if this specific user has valid tokens in storage
-        stored_auth = load_tokens_from_file(current_user_email)
-        if stored_auth:
-            tokens = stored_auth["tokens"]
-            user_info = stored_auth["user_info"]
-            
-            print(f"✅ Restored session for: {current_user_email}")
-            
-            # Restore session state
-            st.session_state.google_authenticated = True
-            st.session_state.google_user = user_info
-            st.session_state.google_access_token = tokens["access_token"]
-            st.session_state.session_start_time = time.time()
-            st.session_state.current_user_email = current_user_email
-            
-            if 'refresh_token' in tokens:
-                st.session_state.google_refresh_token = tokens['refresh_token']
-            if 'expires_at' in tokens:
-                st.session_state.token_expires_at = tokens['expires_at']
-            
-            return True
-
-    # ========== SHOW LOGIN PAGE ==========
-    print(f"📝 No authentication found - showing login page")
+    # ========== STEP 4: NO VALID AUTH FOUND ==========
+    print(f"📝 No authentication found - showing login page\n")
     auth_url = google_oauth.get_authorization_url()
     show_login_page(auth_url)
     return False
 
 def show_login_page(auth_url):
-    """Display the beautiful login page - WITH YOUR ORIGINAL DESIGN"""
+    """Display the beautiful login page"""
     st.markdown(
         f"""
         <style>
