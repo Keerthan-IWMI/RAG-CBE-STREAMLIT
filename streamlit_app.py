@@ -624,6 +624,11 @@ def load_custom_css():
     .section-content {{
         margin-bottom: 0.5rem;
     }}
+
+    .reference-card.reference-highlight {{
+        box-shadow: 0 0 0 2px #0F766E, 0 0 18px rgba(15,118,110,0.5);
+        transition: box-shadow 0.3s ease;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -784,6 +789,22 @@ def main():
     
     load_custom_css()
     init_session_state()
+
+    # JS helper: smooth scroll + highlight the target card
+    st.markdown("""
+    <script>
+    window.highlightSource = function(targetId) {
+        const anchor = document.getElementById(targetId);
+        if (!anchor) return;
+        anchor.scrollIntoView({behavior: 'smooth', block: 'center'});
+        const card = document.getElementById(targetId + '-card');
+        if (card) {
+            card.classList.add('reference-highlight');
+            setTimeout(() => card.classList.remove('reference-highlight'), 1800);
+        }
+    };
+    </script>
+    """, unsafe_allow_html=True)
     
     # Get user email
     user_email = st.session_state.google_user.get("email")
@@ -1012,19 +1033,44 @@ def main():
         return
     
     # Display chat messages from history
-    for message in st.session_state.messages:
+    for idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"], avatar="👤" if message["role"] == "user" else "🤖"):
-            st.markdown(message["content"])
-            
+            content = message["content"]
+
+            if message["role"] == "assistant":
+                # Ensure each assistant message has a unique msg_id
+                msg_id = message.get("msg_id", f"msg-{idx}")
+
+                import re
+                def repl(m, _msg_id=msg_id):
+                    label = m.group(0)                 # e.g. "[Source 3]"
+                    num = re.findall(r"\d+", label)[0] # "3"
+                    target = f"{_msg_id}-source-{num}"
+                    return f'<a href="#{target}" onclick="window.highlightSource(\'{target}\'); return false;">{label}</a>'
+
+                content = re.sub(r"\[Source\s+\d+\]", repl, content)
+                st.markdown(content, unsafe_allow_html=True)
+            else:
+                st.markdown(content)
+
+            # References block
             if "references" in message and message["references"]:
+                msg_id = message.get("msg_id", f"msg-{idx}")
+
                 with st.expander(f"📚 View {len(message['references'])} Source Documents"):
                     for i, doc in enumerate(message["references"], 1):
-                        src = doc.get("metadata", {}).get("source", "Unknown") if isinstance(doc, dict) else doc.metadata.get("source", "Unknown")
-                        page = doc.get("metadata", {}).get("page", "?") if isinstance(doc, dict) else doc.metadata.get("page", "?")
-                        doc_type = doc.get("metadata", {}).get("type", "text") if isinstance(doc, dict) else doc.metadata.get("type", "text")
-                        
-                        type_badge = ""
-                        badge_class = ""
+                        # Handle both dict (from JSON) and Document objects
+                        if isinstance(doc, dict):
+                            meta = doc.get("metadata", {})
+                            text = doc.get("page_content", "")
+                        else:
+                            meta = doc.metadata
+                            text = doc.page_content
+
+                        src = meta.get("source", "Unknown")
+                        page = meta.get("page", "?")
+                        doc_type = meta.get("type", "text")
+
                         if doc_type == "table":
                             type_badge = "🔢 TABLE"
                             badge_class = "badge-table"
@@ -1034,16 +1080,18 @@ def main():
                         else:
                             type_badge = "📄 TEXT"
                             badge_class = "badge-text"
-                        
-                        content = doc.get("page_content", "") if isinstance(doc, dict) else doc.page_content
-                        
+
+                        # Unique ID per message + source index
+                        anchor_id = f"{msg_id}-source-{i}"
+
                         st.markdown(f"""
-                        <div class="reference-card">
+                        <a id="{anchor_id}"></a>
+                        <div class="reference-card highlight-target" id="{anchor_id}-card">
                             <div class="reference-header">
                                 <span>{i}. {src} (Page {page})</span>
                                 <span class="reference-badge {badge_class}">{type_badge}</span>
                             </div>
-                            <div class="reference-content">{content[:300]}...</div>
+                            <div class="reference-content">{text[:300]}...</div>
                         </div>
                         """, unsafe_allow_html=True)
     
@@ -1056,6 +1104,8 @@ def main():
         with st.spinner("🔍 Analyzing IWMI research documents..."):
             try:
                 answer, references = rag.query(prompt)
+
+                msg_id = f"msg-{len(st.session_state.messages)}"
                 
                 # Add assistant response to session state
                 st.session_state.messages.append({

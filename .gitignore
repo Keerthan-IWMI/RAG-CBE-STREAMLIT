@@ -13,5 +13,5 @@ data/
 # Dev container settings
 .devcontainer/
 
-pre_update_streamlit_app.py
-pre_update_rag_pipeline.py
+hyperlink_and_chunker_changed_rag_pipeline.py
+hyperlink_and_chunker_changed_streamlit_app.py
