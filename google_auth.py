@@ -315,6 +315,20 @@ def check_google_auth():
 
     return False
 
+def check_google_auth():
+    """
+    Local stub: always treat user as authenticated.
+    DO NOT COMMIT THIS TO SHARED BRANCHES.
+    """
+    # Fake minimal user object expected by streamlit_app.py
+    st.session_state.google_authenticated = True
+    st.session_state.google_user = {
+        "email": "local.user@example.com",
+        "name": "Local User",
+        "picture": "https://via.placeholder.com/150"
+    }
+    return True
+
 def show_login_page(auth_url):
     """Display the beautiful login page"""
     st.markdown(

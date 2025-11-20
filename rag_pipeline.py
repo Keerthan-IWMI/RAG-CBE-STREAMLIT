@@ -17,6 +17,196 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import tiktoken
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# Add these imports at top of your file (if not already present)
+from sentence_transformers import SentenceTransformer, CrossEncoder
+from typing import List, Tuple, Optional, Dict
+import numpy as np
+import heapq
+import math
+
+class RelevanceChecker:
+    """
+    RelevanceChecker: rerank, threshold, optional contextual compression.
+    """
+
+    def __init__(
+        self,
+        embedding_model: SentenceTransformer,
+        cross_encoder_name: Optional[str] = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        threshold: float = 0.70,
+        min_docs: int = 2,
+        max_docs: int = 6,
+        enable_compression: bool = True,
+        compression_top_sentences: int = 3,
+        batch_size: int = 32,
+        normalize_embeddings: bool = True,
+        fallback_to_cosine: bool = True
+    ):
+        self.embedding_model = embedding_model
+        self.cross_encoder = None
+        self.cross_encoder_name = cross_encoder_name
+
+        if cross_encoder_name:
+            try:
+                self.cross_encoder = CrossEncoder(cross_encoder_name)
+                logger.info(f"Loaded CrossEncoder: {cross_encoder_name}")
+            except Exception as e:
+                logger.warning(f"Failed to load cross-encoder '{cross_encoder_name}': {e}")
+                self.cross_encoder = None
+
+        self.threshold = threshold
+        self.min_docs = min_docs
+        self.max_docs = max_docs
+        self.enable_compression = enable_compression
+        self.compression_top_sentences = compression_top_sentences
+        self.batch_size = batch_size
+        self.normalize_embeddings = normalize_embeddings
+        self.fallback_to_cosine = fallback_to_cosine
+
+    # -------------------------
+    # Public API
+    # -------------------------
+    def filter_documents(
+        self,
+        question: str,
+        docs: List,
+        doc_embeddings: Optional[np.ndarray] = None
+    ) -> List[Tuple[object, float]]:
+
+        logger.info(f"Filtering {len(docs)} retrieved chunks for question: {question}")
+
+        if not docs:
+            logger.warning("No documents retrieved.")
+            return []
+
+        # 1) Scoring
+        if self.cross_encoder is not None:
+            scored = self._score_with_crossencoder(question, docs)
+        else:
+            scored = self._score_with_cosine(question, docs, doc_embeddings)
+
+        # Log all scored chunks
+        for i, (doc, score) in enumerate(scored):
+            logger.info(f"[Score] Rank={i+1} Score={score:.4f} Content={doc.page_content[:150]}...")
+
+        # 2) Thresholding
+        filtered = [(d, s) for d, s in scored if s >= self.threshold]
+        logger.info(f"Chunks above threshold {self.threshold}: {len(filtered)}")
+
+        if len(filtered) < self.min_docs:
+            logger.info(f"Below min_docs={self.min_docs}, selecting top {self.min_docs} anyway.")
+            filtered = scored[: self.min_docs]
+
+        filtered = filtered[: self.max_docs]
+
+        # Log filtered results
+        for doc, score in filtered:
+            logger.info(f"[Selected] Score={score:.4f} Content={doc.page_content[:150]}...")
+
+        # 3) Compression
+        if self.enable_compression:
+            compressed = []
+            for doc, score in filtered:
+                logger.info(f"Compressing chunk (score={score:.4f}): {doc.page_content[:150]}...")
+                compressed_doc = self._compress_document(question, doc, top_k=self.compression_top_sentences)
+                logger.info(f"[Compressed Result] {compressed_doc.page_content[:200]}...")
+                compressed.append((compressed_doc, score))
+            filtered = compressed
+
+        return filtered
+
+    # -------------------------
+    # Internal scoring helpers
+    # -------------------------
+    def _score_with_crossencoder(self, question: str, docs: List) -> List[Tuple[object, float]]:
+        # Format as tuples (query, passage)
+        cross_input = [(question, doc.page_content) for doc in docs]
+        try:
+            scores = self.cross_encoder.predict(cross_input, batch_size=self.batch_size)
+            logger.info("Cross-encoder scoring successful.")
+        except Exception as e:
+            logger.warning(f"Cross-encoder failed: {e}, falling back to cosine.")
+            return self._score_with_cosine(question, docs)
+
+        scores = self._minmax_normalize(np.array(scores))
+        return sorted(list(zip(docs, scores.tolist())), key=lambda x: x[1], reverse=True)
+
+
+    def _score_with_cosine(self, question: str, docs: List, doc_embeddings: Optional[np.ndarray] = None):
+        logger.info("Using cosine similarity scoring...")
+
+        q_emb = self.embedding_model.encode([question], show_progress_bar=False, convert_to_numpy=True)
+        if self.normalize_embeddings:
+            q_emb = self._l2_normalize(q_emb)
+
+        if doc_embeddings is None:
+            texts = [d.page_content for d in docs]
+            doc_embeddings = self.embedding_model.encode(texts, batch_size=self.batch_size,
+                                                         show_progress_bar=False, convert_to_numpy=True)
+        if self.normalize_embeddings:
+            doc_embeddings = self._l2_normalize(doc_embeddings)
+
+        sims = np.dot(doc_embeddings, q_emb.T).reshape(-1)
+        sims = (sims + 1.0) / 2.0  # normalize to 0–1
+
+        return sorted(list(zip(docs, sims.tolist())), key=lambda x: x[1], reverse=True)
+
+    # -------------------------
+    # Contextual compression
+    # -------------------------
+    def _compress_document(self, question: str, doc, top_k: int = 3):
+        text = doc.page_content
+        sentences = self._split_sentences(text)
+
+        logger.info(f"Splitting into {len(sentences)} sentences for compression.")
+
+        if not sentences:
+            return doc
+
+        q_emb = self.embedding_model.encode([question], show_progress_bar=False, convert_to_numpy=True)
+        sent_embs = self.embedding_model.encode(sentences, batch_size=self.batch_size, show_progress_bar=False, convert_to_numpy=True)
+
+        if self.normalize_embeddings:
+            q_emb = self._l2_normalize(q_emb)
+            sent_embs = self._l2_normalize(sent_embs)
+
+        sims = np.dot(sent_embs, q_emb.T).reshape(-1)
+
+        # Log top sentences
+        idx_scores = list(enumerate(sims))
+        idx_scores_sorted = sorted(idx_scores, key=lambda x: x[1], reverse=True)
+        for i, (idx, score) in enumerate(idx_scores_sorted[:top_k]):
+            logger.info(f"[Compression Sentence #{i+1}] Score={score:.4f} Sentence={sentences[idx][:200]}")
+
+        top_idx = [i for i, _ in idx_scores_sorted[:top_k]]
+        top_idx.sort()
+
+        compressed_text = " ".join([sentences[i] for i in top_idx]).strip()
+
+        compressed_doc = type(doc)(
+            page_content=compressed_text,
+            metadata={**getattr(doc, "metadata", {})}
+        )
+        return compressed_doc
+
+    # -------------------------
+    # Utilities
+    # -------------------------
+    @staticmethod
+    def _minmax_normalize(arr):
+        mn, mx = arr.min(), arr.max()
+        return (arr - mn) / (mx - mn + 1e-12)
+
+    @staticmethod
+    def _l2_normalize(x):
+        denom = np.linalg.norm(x, axis=1, keepdims=True)
+        denom[denom == 0] = 1e-12
+        return x / denom
+
+    @staticmethod
+    def _split_sentences(text: str):
+        parts = re.split(r'(?<=[\.\?\!])\s+', text)
+        return [p.strip() for p in parts if p.strip()]
 class ConversationManager:
     """Manages conversation history with model-aware token limits"""
     
@@ -363,17 +553,58 @@ class RAGPipeline:
         # Models
         self.embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
         self.embedding_model.eval()
+        # create relevance checker
+        self.relevance_checker = RelevanceChecker(
+            embedding_model=self.embedding_model,
+            cross_encoder_name="cross-encoder/ms-marco-MiniLM-L-6-v2",  # best-effort default
+            threshold=0.65,
+            min_docs=2,
+            max_docs=6,
+            enable_compression=False,
+            compression_top_sentences=3
+        )
         
         self.pdf_extractor = PDFExtractor()
         
         # Text splitter
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=600,
-            chunk_overlap=100,
-            length_function=len,
-            separators=["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " ", ""],
-            is_separator_regex=False,
+        # self.text_splitter = RecursiveCharacterTextSplitter(
+        #     chunk_size=700,
+        #     chunk_overlap=150,
+        #     length_function=len,
+        #     separators=["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " ", ""],
+        #     is_separator_regex=False,
+        # )
+
+        #Simple sliding window chunker.
+        # from langchain_text_splitters import CharacterTextSplitter
+
+        # self.text_splitter = CharacterTextSplitter(
+        #     chunk_size=512,
+        #     chunk_overlap=50,
+        #     separator="\n\n",   
+        # )
+
+        #Simple fixed length chunker.
+        # from langchain_text_splitters import CharacterTextSplitter
+
+        # self.text_splitter = CharacterTextSplitter(
+        #     chunk_size=512,
+        #     chunk_overlap=0,
+        #     separator="\n\n",   
+        # )
+
+        #Semantic-ish chunker.
+        self.text_splitter = SemanticChunker(
+            embedding_model=self.embedding_model,
+            base_chunk_size=512,
+            base_overlap=50,
+            sim_threshold=0.85,
         )
+        """The Semantica actually worked better than the sliding window chunker."""
+        """Fixed length is shape. But it migth not be good to pick up on context."""
+        """Sliding window chunker actually made it better. I'll have to tweak more with the chunk_size and chunk_overlap."""
+        """When I checked the chunks found in recursive splitter it did have the required texts, but the recursive splitter
+           seems to split them at random points leading to a losss of context."""
         
         # Storage
         self.documents = []
@@ -546,9 +777,11 @@ class RAGPipeline:
             return answer, []
         
         top_docs = retrieved_docs[:top_k]
-        
+        filtered = self.relevance_checker.filter_documents(question, top_docs)
+        # filtered is List[(Document, score)]
+        filtered_docs = [d for d, s in filtered]
         # Generate answer with history
-        answer = self._generate_answer_with_history(question, top_docs)
+        answer = self._generate_answer_with_history(question, filtered_docs)
         
         # Store this exchange in history
         self.conversation_manager.add_exchange(question, answer)
@@ -558,7 +791,7 @@ class RAGPipeline:
         logger.info(f"Conversation: {stats['total_exchanges']} exchanges, "
                 f"{stats['history_tokens']} tokens ({stats['utilization_percent']}% of available)")
         
-        return answer, top_docs
+        return answer, filtered_docs
     
     def _generate_answer_with_history(self, question: str, context_docs: List[Document]) -> str:
         """Generate answer using LLM"""
@@ -573,8 +806,14 @@ class RAGPipeline:
             context_parts.append(
                 f"[Source {i}: {src}, Page {page}] {type_label}\n{doc.page_content}\n"
             )
-        
+
         context = "\n".join(context_parts)
+        
+        # DEBUG: log context that will be sent to LLM
+        logger.info("======== FINAL CONTEXT SENT TO LLM ========")
+        logger.info(context[:4000])  # truncate to avoid huge logs
+        logger.info("===========================================")
+        
         system_prompt = """You are the Circular Bioeconomy Decision Support Assistant (CBE-DSA) - an AI-powered chatbot developed to disseminate applied research and evidence-based insights from the International Water Management Institute (IWMI) and related partners.
 Your primary goal is to help users, including policymakers, industry professionals, entrepreneurs, investors, and development partners, make informed, evidence-based decisions in the circular bioeconomy and sustainable waste management.
 Role and Behaviour:
@@ -607,7 +846,10 @@ Restrictions and Limitations:
 - Always clarify if a recommendation is derived from evidence (explicitly present in documents) or an inferred interpretation (logical synthesis based on available content).
 Response Format:
 - **Overview:** Provide a summary of the findings (20-30 words for specific questions, 50-100 words for response to generic questions).
-- **Key Points:** Present main findings or insights as concise bullet points (•).
+- **Key Points:**
+    • Use bullet points starting with “•”.
+    • After EACH bullet point, insert a blank line (exactly one empty line).
+    • Each bullet point must be one sentence only.
 - **Implications:** Present the practical or policy relevance as bullet points (20-30 words for specific questions, 50-100 words for response to generic questions).
 - **If comparative or quantitative data are available**, display them using a **Markdown table** (| Column | Column |).
 - **Always cite sources** in [Source X] format after each claim and hyperlink the sources.
@@ -615,6 +857,8 @@ Response Format:
 - **Combine multiple document sources when possible and most logical** to provide integrated insights.
 CONVERSATION FLOW & ENGAGEMENT (MANDATORY)
 - **Every response must end with a proactive, context-aware follow-up question or suggestion.**
+- Prefer follow-up questions that can be answered using details from previous exchanges (history) or the current information (retrieved documents) to deepen the discussion.
+- If no specific follow-up question fits based on history or current info, encourage continuation with open-ended prompts like "Do you have any further questions?" or "What else would you like to know about this topic?"
 - This keeps the conversation alive and guides the user toward deeper insights.
 \n
 Information Use:
@@ -627,7 +871,12 @@ Your mission is to provide support to science-based decision-making and accelera
 {context}
 
 QUESTION: {question}
-
+\n
+INSTRUCTIONS FOR ANSWERING:
+- Use the above context **and** the full conversation history.
+- Always prioritise the **most relevant** and **highest-matching** information.
+- Follow the Response Format, the System Prompt, and all other detailed instructions strictly.
+\n
 ANSWER (with citations):"""
         
         # Build messages with conversation history
@@ -713,3 +962,243 @@ ANSWER (with citations):"""
             stats["content_types"][doc_type] = stats["content_types"].get(doc_type, 0) + 1
         
         return stats
+
+    ##Chunk checker. Only for debugging purposes.
+    def debug_print_chunks_for_source(self, source_name: str, max_chunks: int = 20):
+        """Print all (or first N) chunks for a given PDF source."""
+        matched = [d for d in self.documents if d.metadata.get("source") == source_name]
+        print(f"[DEBUG] Found {len(matched)} chunks for source='{source_name}'")
+        for i, doc in enumerate(matched[:max_chunks], 1):
+            print(f"\n--- Chunk {i} ---")
+            print("metadata:", doc.metadata)
+            preview = doc.page_content[:800].replace("\n", " ")
+            print("text    :", preview, "...")
+
+class SemanticChunker:
+    """
+    Very simple semantic-ish chunker:
+    1) First split into small fixed chunks.
+    2) Then merge adjacent chunks whose embeddings are very similar.
+    """
+
+    def __init__(
+        self,
+        embedding_model: SentenceTransformer,
+        base_chunk_size: int = 512,
+        base_overlap: int = 50,
+        sim_threshold: float = 0.85,
+    ):
+        from langchain_text_splitters import CharacterTextSplitter
+
+        self.embedding_model = embedding_model
+        self.base_splitter = CharacterTextSplitter(
+            chunk_size=base_chunk_size,
+            chunk_overlap=base_overlap,
+            separator="\n\n",
+        )
+        self.sim_threshold = sim_threshold
+
+    def split_text(self, text: str) -> list[str]:
+        # 1) base split
+        mini_chunks = self.base_splitter.split_text(text)
+        if len(mini_chunks) <= 1:
+            return mini_chunks
+
+        # 2) embed all mini-chunks
+        embs = self.embedding_model.encode(
+            mini_chunks, show_progress_bar=False, convert_to_numpy=True, normalize_embeddings=True
+        )
+
+        # 3) merge adjacent chunks with high cosine similarity
+        merged_chunks: list[str] = []
+        current = mini_chunks[0]
+        current_emb = embs[0]
+
+        for i in range(1, len(mini_chunks)):
+            sim = float(np.dot(current_emb, embs[i]))
+            if sim >= self.sim_threshold:
+                # same topic: merge
+                current = current + " " + mini_chunks[i]
+                # update embedding as average of both (approx)
+                current_emb = (current_emb + embs[i]) / 2.0
+            else:
+                merged_chunks.append(current)
+                current = mini_chunks[i]
+                current_emb = embs[i]
+
+        merged_chunks.append(current)
+        return merged_chunks
+
+if __name__ == "__main__":
+    """
+    Manual index builder / inspector.
+    Run from terminal:
+        python rag_pipeline.py
+    """
+
+    PDF_FOLDER = r"C:\Users\M.Asaf\Downloads\Agri PDFs\agri and waste water"
+    INDEX_FILE = "pdf_index_enhanced.pkl"
+
+    # Minimal model params – just enough to construct RAGPipeline.
+    # We won't call .query() here, so the tokens/URL don't actually get used.
+    model_params = {
+        "llm_type": "deepseek",
+        "hf_token": f'st.secrets["hf_backup_token_2"]',
+        "deepseek_url": "https://router.huggingface.co/v1/chat/completions",
+        "deepseek_model": "deepseek-ai/DeepSeek-V3.1:novita",
+    }
+
+    print("[MAIN] Initializing RAGPipeline...")
+    pipeline = RAGPipeline(
+        pdf_folder=PDF_FOLDER,
+        index_file=INDEX_FILE,
+        model_params=model_params,
+    )
+
+    # 1) Try to load existing index
+    if pipeline.load_index():
+        print("[MAIN] Existing index loaded.")
+    else:
+        print("[MAIN] No index found or failed to load. Building a new one...")
+        try:
+            total_chunks = pipeline.build_index()
+            print(f"[MAIN] Index built successfully. Total chunks: {total_chunks}")
+        except Exception as e:
+            print("[MAIN] Index build failed:", e)
+            raise
+
+    # 2) Show a spread of sample chunks for inspection (max 1 per source PDF)
+    # if pipeline.documents:
+    #     print(f"\n[MAIN] Showing up to 20 sample chunks from different PDFs "
+    #           f"(total chunks: {len(pipeline.documents)}):")
+
+    #     seen_sources = set()
+    #     shown = 0
+    #     for doc in pipeline.documents:
+    #         src = doc.metadata.get("source", "Unknown")
+    #         if src in seen_sources:
+    #             continue
+    #         seen_sources.add(src)
+    #         shown += 1
+
+    #         print(f"\n--- Sample {shown} ---")
+    #         print("source :", src)
+    #         print("metadata:", doc.metadata)
+    #         preview = doc.page_content[:400].replace("\n", " ")
+    #         print("text    :", preview, "...")
+
+    #         if shown >= 20:
+    #             break
+    # else:
+    #     print("[MAIN] No documents in pipeline.documents after load/build.")
+
+    # print("\n[MAIN] Debug: chunks for Rao-2018-Power_from_agro-waste-Business_Model_6.pdf")
+    # pipeline.debug_print_chunks_for_source("Rao-2018-Power_from_agro-waste-Business_Model_6.pdf",
+    #                                        max_chunks=20)
+
+"""
+[MAIN] Showing up to 20 sample chunks from different PDFs (total chunks: 4781):
+
+--- Sample 1 ---
+source : Danso-2018-Fixed_wastewater-freshwater_swap_Mashhad_Plain_Iran-Case_Study.pdf
+metadata: {'source': 'Danso-2018-Fixed_wastewater-freshwater_swap_Mashhad_Plain_Iran-Case_Study.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Fixed wastewater-freshwater swap (Mashhad Plain, Iran) Value offer: Treated wastewater for farmers in exchange for freshwater for urban use Organization type: Public and private (farmer associations) Status of organization: Operational (since 20052008) Major partners: Khorasan Razavi Regional W ...
+
+--- Sample 2 ---
+source : Drechsel-2018-Corporate_social_responsibility_CSR_as_driver_of_change-Business_Model_22.pdf
+metadata: {'source': 'Drechsel-2018-Corporate_social_responsibility_CSR_as_driver_of_change-Business_Model_22.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 2}
+text    : BUSINESS MODEL 22 Corporate Social Responsibility (CSR) as driver of change Model name Corporate Social Responsibility as driver of change Location of supporting cases Ghana (with additional input from other countries) Waste stream Wastewater ...
+
+--- Sample 3 ---
+source : Drechsel-2018-Wastewater_for_agriculture_forestry_and_aquaculture-Section_IV.pdf
+metadata: {'source': 'Drechsel-2018-Wastewater_for_agriculture_forestry_and_aquaculture-Section_IV.pdf', 'page': 1, 'type': 'heading'}
+text    : SECTION IV  WASTEWATER FOR AGRICULTURE, FORESTRY AND AQUACULTURE ...
+
+--- Sample 4 ---
+source : Drechsel-2018-Wastewater_for_fruit_and_wood_production_Egypt-Case_Study.pdf
+metadata: {'source': 'Drechsel-2018-Wastewater_for_fruit_and_wood_production_Egypt-Case_Study.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Wastewater for fruit and wood production (Egypt) Location: El-Gabal El-Asfar, northeast Cairo, Egypt Waste input type: Domestic and small industrial wastewater Value offer: Secondary treated wastewater reuse for cactus fruits (70%), lemon trees, and wood production; sludge sale for composting a ...
+
+--- Sample 5 ---
+source : Felgenhauer-2018-Enabling_private_sector_investment_in_large_scale_wastewater_treatment-Business_Model_19.pdf
+metadata: {'source': 'Felgenhauer-2018-Enabling_private_sector_investment_in_large_scale_wastewater_treatment-Business_Model_19.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 2}
+text    : BUSINESS MODEL 19 Enabling private sector investment in large scale wastewater treatment Model name Enabling private sector investment in large-scale wastewater treatment Value-Added Waste Products Treated wastewater for irrigation and a healthy environment Objective of entity Cost-recovery [ ]; For ...
+
+--- Sample 6 ---
+source : Gebreszgabher-2018-Bio-ethanol_and_chemical_products_from_agro_and_agro-industrial_waste-Business_Model_9.pdf
+metadata: {'source': 'Gebreszgabher-2018-Bio-ethanol_and_chemical_products_from_agro_and_agro-industrial_waste-Business_Model_9.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 4}
+text    : BUSINESS MODEL 9 Bio-ethanol and chemical products from agro and agro-industrial waste Model name Bio-ethanol and chemical products from agro and agro-industrial waste Waste stream Organic waste  Agro-waste from farms and agro-processing factories and vinasse waste generated during ethanol productio ...
+
+--- Sample 7 ---
+source : Gebrezgabher-2018-Combined_heat_and_power_and_ethanol_from_sugar_industry_waste_SSSSK_Maharashtra_India-Case_Study.pdf
+metadata: {'source': 'Gebrezgabher-2018-Combined_heat_and_power_and_ethanol_from_sugar_industry_waste_SSSSK_Maharashtra_India-Case_Study.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Combined heat and power and ethanol from sugar industry waste (SSSSK, Maharashtra, India) Waste input type: Bagasse, molasses, spent wash (Distillery efﬂuent) Value offer: Electricity/heat, ethanol, pressed mud and bio-fertilizer Status of organization: Operational (since 1962), co-generation u ...
+
+--- Sample 8 ---
+source : Gebrezgabher-2018-Combined_heat_and_power_from_agro-industrial_waste_for_on-and_off-site_use-Business_Model_8.pdf
+metadata: {'source': 'Gebrezgabher-2018-Combined_heat_and_power_from_agro-industrial_waste_for_on-and_off-site_use-Business_Model_8.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 2}
+text    : BUSINESS MODEL 8 Combined heat and power from agro-industrial waste for on- and off-site use Model name Combined heat and power from agro-industrial waste for on- and off-site use Waste stream Agro-industrial waste  Bagasse from sugar processing factories; Efﬂuent (solid and liquid waste) from agro- ...
+
+--- Sample 9 ---
+source : Hanjra-2018-Wastewater_as_a_commodity_driving_change-Business_Model_23.pdf
+metadata: {'source': 'Hanjra-2018-Wastewater_as_a_commodity_driving_change-Business_Model_23.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 3}
+text    : BUSINESS MODEL 23 Wastewater as a commodity driving change Munir A. Hanjra, Krishna C. Rao, George K ...
+
+--- Sample 10 ---
+source : IWMI-2022-Evidence-based_strategies_to_accelerate_innovation_scaling_in_agricultural_value_chains.pdf
+metadata: {'source': 'IWMI-2022-Evidence-based_strategies_to_accelerate_innovation_scaling_in_agricultural_value_chains.pdf', 'page': 1, 'type': 'heading'}
+text    : Evidence-based strategies to accelerate innovation scaling in agricultural value chains ...
+
+--- Sample 11 ---
+source : IWMI-2023-Developing_bankable_water_reuse_projects_guidelines_for_planners_investors_project_designers_and_operators.pdf
+metadata: {'source': 'IWMI-2023-Developing_bankable_water_reuse_projects_guidelines_for_planners_investors_project_designers_and_operators.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 2}
+text    : Guidelines for planners, investors, project designers and operators business value propositions, setting priorities, and developing a business plan  Identify water reuse options that safeguard the environment and human health, and those that provide products or services further downstream in the val ...
+
+--- Sample 12 ---
+source : Lebel-2018-Combined_heat_and_power_from_agro-industries_wastewater_TBEC_Bangkok_Thailand-Case_Study.pdf
+metadata: {'source': 'Lebel-2018-Combined_heat_and_power_from_agro-industries_wastewater_TBEC_Bangkok_Thailand-Case_Study.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 2}     
+text    : CASE Combined heat and power from agro-industrial wastewater (TBEC, Bangkok, Thailand) Waste input type: Wastewater from agricultural industries (starch, palm oil and ethanol) Value offer: Build, Own, Operate and Transfer (BOOT), one-stop shop to treat agro- industrial efﬂuent and generate electrici ...
+
+--- Sample 13 ---
+source : Mateo-Sagasta-2022-Water_reuse_in_the_Middle_East_and_North_Africa_a_sourcebook.pdf
+metadata: {'source': 'Mateo-Sagasta-2022-Water_reuse_in_the_Middle_East_and_North_Africa_a_sourcebook.pdf', 'page': 1, 'type': 'heading'}
+text    : Water reuse in the Middle East and North Africa A sourcebook Edited by: Javier Mateo-Sagasta (IWMI) Mohamed Al-Hamdi (FAO) Khaled AbuZeid (AWC) ...
+
+--- Sample 14 ---
+source : Mateo-Sagasta-2023-Expanding_water_reuse_in_the_Middle_East_and_North_Africa_policy_report.pdf
+metadata: {'source': 'Mateo-Sagasta-2023-Expanding_water_reuse_in_the_Middle_East_and_North_Africa_policy_report.pdf', 'page': 1, 'type': 'heading'}
+text    : Expanding water reuse in the Middle East and North Africa Policy Report Javier Mateo-Sagasta, Marie Helene Nassif, Mohamed Tawﬁk, Solomie Gebrezgabher, Everisto Mapedza, Nisreen Lahham and Mohamed Al-Hamdi ...
+
+--- Sample 15 ---
+source : Otoo-2018-Case_Agricultural_waste_to_high_quality_compost_DutuTech_Kenya.pdf
+metadata: {'source': 'Otoo-2018-Case_Agricultural_waste_to_high_quality_compost_DutuTech_Kenya.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Agricultural waste to high quality compost (DuduTech, Kenya) Miriam Otoo, Nancy Karanja, Jack Odero and Lesley Hope Waste input type: Vegetative waste, livestock waste Scale of businesses: Processes 125 tons of waste per month Major partners: Finlays Kenya Limited, Local livestock farmers ...
+
+--- Sample 16 ---
+source : Otoo-2018-Enriched_compost_production_from_sugar_industry_waste_PASIC_India-Case_Study.pdf
+metadata: {'source': 'Otoo-2018-Enriched_compost_production_from_sugar_industry_waste_PASIC_India-Case_Study.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Enriched compost production from sugar industry waste (PASIC, India) Miriam Otoo, Marudhanayagam Nageswaran, Lesley Hope and Priyanie Amerasinghe Value offer: Provision of enriched pressmud compost for agricultural production Scale of businesses: Processes 6,0009,000 tons of waste/year Major pa ...
+
+--- Sample 17 ---
+source : Otoo-2018-Nutrient_recovery_from_own_agro-industrial_waste-Business_Model_13.pdf
+metadata: {'source': 'Otoo-2018-Nutrient_recovery_from_own_agro-industrial_waste-Business_Model_13.pdf', 'page': 1, 'type': 'heading', 'chunk_index': 0, 'total_chunks': 2}
+text    : BUSINESS MODEL 13 Nutrient recovery from own agro-industrial waste Model name Nutrient recovery from own agro-industrial waste Value-Added Waste Products Regular compost, enriched vermi-compost Geography Regions with signiﬁcant livestock production, agro-processing enterprises Scale of production Me ...
+
+--- Sample 18 ---
+source : Rao-2018-Power_from_agro-waste-Business_Model_6.pdf
+metadata: {'source': 'Rao-2018-Power_from_agro-waste-Business_Model_6.pdf', 'page': 1, 'type': 'paragraph', 'chunk_index': 0, 'total_chunks': 2}
+text    : Waste stream Agro-waste (from farmers and agro-industries) Value-added product Power (through biomass gasiﬁcation or combustion) Geography Rural areas with large acres of crop cultivation for ease of procurement of crop residues Scale of production Small to medium scale; 25100 kW (gasiﬁcation) and u ...
+
+--- Sample 19 ---
+source : Watson-2018-Bio-ethanol_from_cassava_waste_ETAVEN_Carabobo_Venezuela-Case_Study.pdf
+metadata: {'source': 'Watson-2018-Bio-ethanol_from_cassava_waste_ETAVEN_Carabobo_Venezuela-Case_Study.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Bio-ethanol from cassava waste (ETAVEN, Carabobo, Venezuela) Value offer: Bio-ethanol (as additive to petrol/ gasoline as transportation fuel) Status of organization: Established in 2007, Business operational since 2012 Major partners: University of Carabobo, Ministry of Science and Technology, ...
+
+--- Sample 20 ---
+source : Watson-2018-Organic_binder_from_alcohol_production-Case_study.pdf
+metadata: {'source': 'Watson-2018-Organic_binder_from_alcohol_production-Case_study.pdf', 'page': 1, 'type': 'heading'}
+text    : CASE Organic binder from alcohol production (Eco Biosis S.A., Veracruz, Mexico) Waste input type: Vinasse waste (from alcohol production) Value offer: Clean water and chemical additive (for cement) Status of organization: Established in 2011, business operational since March 2013 Scale of businesses ...
+"""
+
+
+#It's actually correctly identifying headings and paragraphs.
