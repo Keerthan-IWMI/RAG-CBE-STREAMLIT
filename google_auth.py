@@ -113,72 +113,89 @@ class GoogleOAuth:
             return tokens
         return None
 
-# ==================== MULTI-USER STORAGE FUNCTIONS ====================
+# ==================== USER-SPECIFIC TOKEN STORAGE ====================
+
+def get_user_token_file(user_email, browser_id):
+    """
+    ✅ CREATE SEPARATE FILE FOR EACH USER + BROWSER COMBINATION!
+    Format: .streamlit_tokens_{browser_hash}_{user_hash}.json
+    """
+    browser_hash = hashlib.md5(browser_id.encode()).hexdigest()[:8]
+    user_hash = hashlib.md5(user_email.encode()).hexdigest()[:8]
+    return f".streamlit_tokens_{browser_hash}_{user_hash}.json"
+
+def get_all_user_token_files(browser_id):
+    """Get all token files for current browser"""
+    browser_hash = hashlib.md5(browser_id.encode()).hexdigest()[:8]
+    token_files = []
+    
+    for file in os.listdir("."):
+        if file.startswith(f".streamlit_tokens_{browser_hash}_") and file.endswith(".json"):
+            token_files.append(file)
+    
+    return token_files
 
 def save_tokens_to_file(tokens, user_info, browser_id):
-    """Save tokens and user info to JSON file using email as key"""
+    """✅ Save tokens to USER-SPECIFIC + BROWSER-SPECIFIC file"""
     try:
         user_email = user_info.get('email')
         if not user_email:
             print("❌ No email found in user info")
             return False
         
-        all_users_data = {}
-        if os.path.exists(TOKEN_STORAGE_FILE):
-            try:
-                with open(TOKEN_STORAGE_FILE, "r") as f:
-                    all_users_data = json.load(f)
-                if not isinstance(all_users_data, dict):
-                    all_users_data = {}
-            except:
-                all_users_data = {}
+        # ✅ CRITICAL: Use user-specific + browser-specific file
+        file_path = get_user_token_file(user_email, browser_id)
         
         user_data = {
-            "tokens": tokens,
+            "tokens": {
+                "access_token": tokens.get("access_token"),
+                "refresh_token": tokens.get("refresh_token"),
+                "expires_at": tokens.get("expires_at"),
+                "expires_in": tokens.get("expires_in"),
+            },
             "user_info": user_info,
             "browser_id": browser_id,
+            "user_email": user_email,
+            "is_active": True,  # ✅ Track active status
             "saved_at": time.time(),
             "last_accessed": time.time()
         }
         
-        all_users_data[user_email] = user_data
+        with open(file_path, "w") as f:
+            json.dump(user_data, f, indent=2)
         
-        with open(TOKEN_STORAGE_FILE, "w") as f:
-            json.dump(all_users_data, f, indent=2)
-        
-        print(f"✅ Saved tokens for user: {user_email} on browser: {browser_id[:8]}")
+        print(f"✅ Saved tokens for user: {user_email}")
+        print(f"   📁 Stored in: {file_path}")
+        print(f"   🖥️ Browser ID: {browser_id[:8]}")
         return True
         
     except Exception as e:
         print(f"❌ Error saving tokens: {e}")
         return False
 
-def load_tokens_from_file(user_email):
-    """Load tokens for specific user from multi-user JSON file"""
+def load_tokens_from_file(browser_id, user_email=None):
+    """✅ Load tokens from specific user file or find active session"""
     try:
-        if not user_email or not os.path.exists(TOKEN_STORAGE_FILE):
+        # If specific user email provided
+        if user_email:
+            file_path = get_user_token_file(user_email, browser_id)
+            if os.path.exists(file_path):
+                return load_single_token_file(file_path)
             return None
         
-        try:
-            with open(TOKEN_STORAGE_FILE, "r") as f:
-                all_users_data = json.load(f)
-            if not isinstance(all_users_data, dict):
-                return None
-        except:
-            return None
+        # Otherwise, find active session among all users for this browser
+        token_files = get_all_user_token_files(browser_id)
+        active_sessions = []
         
-        if user_email in all_users_data:
-            user_data = all_users_data[user_email]
-            tokens = user_data.get("tokens")
-            user_info = user_data.get("user_info")
-            
-            if validate_user_session(tokens, user_info):
-                user_data["last_accessed"] = time.time()
-                save_all_users_data(all_users_data)
-                return {"tokens": tokens, "user_info": user_info}
-            else:
-                del all_users_data[user_email]
-                save_all_users_data(all_users_data)
+        for file_path in token_files:
+            user_data = load_single_token_file(file_path)
+            if user_data and user_data.get("is_active", False):
+                active_sessions.append(user_data)
+        
+        # Return the most recently accessed active session
+        if active_sessions:
+            active_sessions.sort(key=lambda x: x.get("last_accessed", 0), reverse=True)
+            return active_sessions[0]
         
         return None
     
@@ -186,8 +203,39 @@ def load_tokens_from_file(user_email):
         print(f"❌ Error loading tokens: {e}")
         return None
 
-def validate_user_session(tokens, user_info):
-    """Validate if user session is still valid"""
+def load_single_token_file(file_path):
+    """Load and validate a single token file"""
+    try:
+        if not os.path.exists(file_path):
+            return None
+        
+        with open(file_path, "r") as f:
+            user_data = json.load(f)
+        
+        tokens = user_data.get("tokens")
+        user_info = user_data.get("user_info")
+        
+        # ✅ Validate session and refresh if needed
+        if validate_user_session(tokens, user_info, file_path):
+            # Update last accessed time
+            user_data["last_accessed"] = time.time()
+            with open(file_path, "w") as f:
+                json.dump(user_data, f, indent=2)
+            return user_data
+        else:
+            # Mark as inactive instead of deleting
+            user_data["is_active"] = False
+            with open(file_path, "w") as f:
+                json.dump(user_data, f, indent=2)
+            print(f"🔴 Marked session as inactive: {file_path}")
+        
+        return None
+    
+    except:
+        return None
+
+def validate_user_session(tokens, user_info, file_path):
+    """Validate if user session is still valid - includes token refresh"""
     if not tokens or not user_info:
         return False
     
@@ -195,95 +243,55 @@ def validate_user_session(tokens, user_info):
         return False
     
     expires_at = tokens.get("expires_at")
-    if expires_at and time.time() > expires_at:
+    current_time = time.time()
+    
+    # ✅ Check if token is expired or about to expire (within 5 minutes)
+    if expires_at and (current_time > expires_at - 300):
+        user_email = user_info.get("email", "Unknown")
+        print(f"⏰ Token expired/expiring for {user_email}, attempting refresh...")
         google_oauth = GoogleOAuth()
         refresh_token = tokens.get("refresh_token")
         
         if refresh_token:
             new_tokens = google_oauth.refresh_access_token(refresh_token)
             if new_tokens:
-                new_tokens['refresh_token'] = refresh_token
-                save_tokens_to_file(new_tokens, user_info, "")
+                print(f"✅ Token refreshed for {user_email}")
+                # ✅ Update tokens
+                tokens['access_token'] = new_tokens.get('access_token')
+                tokens['expires_at'] = new_tokens.get('expires_at')
+                tokens['refresh_token'] = refresh_token
                 return True
+        
+        print(f"❌ Failed to refresh token for {user_email}")
         return False
     
     return True
 
-def save_all_users_data(all_users_data):
-    """Helper function to save all users data"""
+def mark_session_inactive(user_email, browser_id):
+    """Mark a specific user session as inactive"""
     try:
-        with open(TOKEN_STORAGE_FILE, "w") as f:
-            json.dump(all_users_data, f, indent=2)
+        file_path = get_user_token_file(user_email, browser_id)
+        if os.path.exists(file_path):
+            with open(file_path, "r") as f:
+                user_data = json.load(f)
+            
+            user_data["is_active"] = False
+            with open(file_path, "w") as f:
+                json.dump(user_data, f, indent=2)
+            
+            print(f"🔴 Marked session as inactive: {user_email}")
         return True
     except Exception as e:
-        print(f"Error saving all users data: {e}")
+        print(f"❌ Error marking session inactive: {e}")
         return False
 
-def get_all_stored_users():
-    """Get list of all users with stored sessions"""
+def delete_user_tokens(user_email, browser_id):
+    """Delete stored tokens for specific user in THIS browser"""
     try:
-        if not os.path.exists(TOKEN_STORAGE_FILE):
-            return []
-        
-        try:    
-            with open(TOKEN_STORAGE_FILE, "r") as f:
-                all_users_data = json.load(f)
-            if not isinstance(all_users_data, dict):
-                return []
-        except:
-            return []
-        
-        return list(all_users_data.keys())
-    except Exception as e:
-        print(f"Error getting stored users: {e}")
-        return []
-
-def find_user_by_browser(browser_id):
-    """Find which user is logged in on this browser"""
-    try:
-        if not os.path.exists(TOKEN_STORAGE_FILE):
-            return None
-        
-        try:
-            with open(TOKEN_STORAGE_FILE, "r") as f:
-                all_users_data = json.load(f)
-        except:
-            return None
-        
-        for user_email, user_data in all_users_data.items():
-            if user_data.get("browser_id") == browser_id:
-                return user_email
-        
-        return None
-    except:
-        return None
-
-def delete_tokens_from_file(user_email=None):
-    """Delete stored tokens for specific user"""
-    try:
-        if not os.path.exists(TOKEN_STORAGE_FILE):
-            return True
-        
-        try:
-            with open(TOKEN_STORAGE_FILE, "r") as f:
-                all_users_data = json.load(f)
-            if not isinstance(all_users_data, dict):
-                return False
-        except:
-            return False
-        
-        if not user_email and st.session_state.get('google_user'):
-            user_email = st.session_state.google_user.get('email')
-        
-        if not user_email:
-            return False
-        
-        if user_email in all_users_data:
-            del all_users_data[user_email]
-            with open(TOKEN_STORAGE_FILE, "w") as f:
-                json.dump(all_users_data, f, indent=2)
+        file_path = get_user_token_file(user_email, browser_id)
+        if os.path.exists(file_path):
+            os.remove(file_path)
             print(f"✅ Deleted tokens for user: {user_email}")
-        
         return True
     except Exception as e:
         print(f"❌ Error deleting tokens: {e}")
@@ -292,10 +300,12 @@ def delete_tokens_from_file(user_email=None):
 # ==================== AUTH FUNCTIONS ====================
 
 def logout():
-    """Enhanced logout - clear session and remove user from storage"""
-    user_email = None
-    if st.session_state.get('google_user'):
-        user_email = st.session_state.google_user.get('email')
+    """Enhanced logout - clear session and mark tokens as inactive for current user"""
+    browser_id = get_browser_identifier()
+    current_user = st.session_state.get("current_user_email")
+    
+    if current_user:
+        mark_session_inactive(current_user, browser_id)
     
     keys_to_clear = [
         'google_authenticated', 'google_user', 'google_access_token',
@@ -307,56 +317,50 @@ def logout():
         if key in st.session_state:
             del st.session_state[key]
     
-    if user_email:
-        delete_tokens_from_file(user_email)
-    
     st.rerun()
 
 def restore_session_from_storage(browser_id):
     """
-    ✅ FIXED: Restore user session from file without depending on session_state
-    This is called on every page load/refresh
+    ✅ Restore user session from USER-SPECIFIC + BROWSER-SPECIFIC file
+    This finds the most recently active session for this browser
     """
-    print(f"🔍 Attempting to restore session for browser: {browser_id[:8]}")
+    print(f"\n🔍 Attempting to restore session for browser: {browser_id[:8]}")
     
-    # Step 1: Try to find user by browser ID
-    user_email = find_user_by_browser(browser_id)
+    stored_auth = load_tokens_from_file(browser_id)
     
-    if user_email:
-        print(f"   Found user by browser ID: {user_email}")
-        stored_auth = load_tokens_from_file(user_email)
+    if stored_auth and stored_auth.get("is_active", False):
+        tokens = stored_auth["tokens"]
+        user_info = stored_auth["user_info"]
+        user_email = user_info.get("email", "Unknown")
         
-        if stored_auth:
-            tokens = stored_auth["tokens"]
-            user_info = stored_auth["user_info"]
-            
-            print(f"✅ Successfully restored session for: {user_email}")
-            
-            # Restore to session state
-            st.session_state.google_authenticated = True
-            st.session_state.google_user = user_info
-            st.session_state.google_access_token = tokens.get("access_token")
-            st.session_state.session_start_time = time.time()
-            st.session_state.current_user_email = user_email
-            
-            if 'refresh_token' in tokens:
-                st.session_state.google_refresh_token = tokens['refresh_token']
-            if 'expires_at' in tokens:
-                st.session_state.token_expires_at = tokens['expires_at']
-            
-            return True
+        print(f"✅ Successfully restored session for: {user_email}")
+        
+        # Restore to session state
+        st.session_state.google_authenticated = True
+        st.session_state.google_user = user_info
+        st.session_state.google_access_token = tokens.get("access_token")
+        st.session_state.session_start_time = time.time()
+        st.session_state.current_user_email = user_email
+        
+        if 'refresh_token' in tokens:
+            st.session_state.google_refresh_token = tokens['refresh_token']
+        if 'expires_at' in tokens:
+            st.session_state.token_expires_at = tokens['expires_at']
+        
+        return True
     
-    print(f"   No valid session found for this browser")
+    print(f"   ❌ No valid active session found for this browser")
     return False
 
 def check_google_auth():
-    """Check if user is authenticated with Google - FIXED VERSION"""
+    """Check if user is authenticated with Google - MULTI-USER FIXED VERSION"""
     google_oauth = GoogleOAuth()
     params = st.query_params
     browser_id = get_browser_identifier()
 
     print(f"\n{'='*60}")
     print(f"🔐 AUTH CHECK - Browser: {browser_id[:8]}")
+    print(f"📊 Active users for this browser: {len(get_all_user_token_files(browser_id))}")
     print(f"{'='*60}")
 
     # ========== STEP 1: HANDLE OAUTH CALLBACK ==========
@@ -420,7 +424,7 @@ def check_google_auth():
                 if 'expires_at' in tokens:
                     st.session_state.token_expires_at = tokens['expires_at']
                 
-                # ✅ SAVE WITH BROWSER ID
+                # ✅ SAVE TO USER-SPECIFIC + BROWSER-SPECIFIC FILE
                 save_tokens_to_file(tokens, user_info, browser_id)
                 
                 st.query_params.clear()
@@ -443,8 +447,8 @@ def check_google_auth():
             logout()
             return False
 
-    # ========== STEP 3: RESTORE FROM PERSISTENT STORAGE ✅ FIXED ==========
-    print(f"🔍 Checking persistent storage...")
+    # ========== STEP 3: RESTORE FROM PERSISTENT STORAGE ✅ MULTI-USER FIXED ==========
+    print(f"🔍 Checking persistent storage for this browser...")
     if restore_session_from_storage(browser_id):
         return True
     
