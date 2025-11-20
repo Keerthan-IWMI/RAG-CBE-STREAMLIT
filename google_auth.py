@@ -133,9 +133,12 @@ def save_tokens_to_file(tokens, user_info):
         print(f"❌ Error saving tokens: {e}")
         return False
 
-def load_tokens_from_file(user_email=None):
+def load_tokens_from_file(user_email):
     """Load tokens for specific user from multi-user JSON file"""
     try:
+        if not user_email:
+            return None
+            
         if not os.path.exists(TOKEN_STORAGE_FILE):
             return None
         
@@ -151,17 +154,10 @@ def load_tokens_from_file(user_email=None):
                 
         except (json.JSONDecodeError, Exception) as e:
             print(f"⚠️ Corrupted token file: {e}")
-            # Optionally backup and reset the file
-            try:
-                backup_file = TOKEN_STORAGE_FILE + ".corrupted"
-                os.rename(TOKEN_STORAGE_FILE, backup_file)
-                print(f"✅ Backed up corrupted file to: {backup_file}")
-            except:
-                pass
             return None
         
-        # 🔒 CRITICAL FIX: Only load specific user, never auto-login to random user
-        if user_email and user_email in all_users_data:
+        # Load specific user
+        if user_email in all_users_data:
             user_data = all_users_data[user_email]
             tokens = user_data.get("tokens")
             user_info = user_data.get("user_info")
@@ -290,7 +286,7 @@ def logout():
     keys_to_clear = [
         'google_authenticated', 'google_user', 'google_access_token',
         'google_refresh_token', 'session_start_time', 'token_expires_at',
-        'current_user_email'  # Added this
+        'current_user_email'
     ]
     
     for key in keys_to_clear:
@@ -368,7 +364,7 @@ def check_google_auth():
                 st.session_state.google_user = user_info
                 st.session_state.google_access_token = tokens["access_token"]
                 st.session_state.session_start_time = time.time()
-                st.session_state.current_user_email = user_email  # Track current user
+                st.session_state.current_user_email = user_email
                 
                 if 'refresh_token' in tokens:
                     st.session_state.google_refresh_token = tokens['refresh_token']
@@ -402,10 +398,32 @@ def check_google_auth():
     # ========== CHECK PERSISTENT STORAGE ==========
     print(f"🔍 Checking persistent storage...")
     
-    # 🔒 CRITICAL FIX: Only check storage if we have a way to identify user
-    # For now, we'll only use session state, not auto-login from storage
-    # This prevents random user auto-login
+    # 🎯 FIXED: Check if current user has valid tokens in storage
+    current_user_email = st.session_state.get("current_user_email")
     
+    if current_user_email:
+        # Check if this specific user has valid tokens in storage
+        stored_auth = load_tokens_from_file(current_user_email)
+        if stored_auth:
+            tokens = stored_auth["tokens"]
+            user_info = stored_auth["user_info"]
+            
+            print(f"✅ Restored session for: {current_user_email}")
+            
+            # Restore session state
+            st.session_state.google_authenticated = True
+            st.session_state.google_user = user_info
+            st.session_state.google_access_token = tokens["access_token"]
+            st.session_state.session_start_time = time.time()
+            st.session_state.current_user_email = current_user_email
+            
+            if 'refresh_token' in tokens:
+                st.session_state.google_refresh_token = tokens['refresh_token']
+            if 'expires_at' in tokens:
+                st.session_state.token_expires_at = tokens['expires_at']
+            
+            return True
+
     # ========== SHOW LOGIN PAGE ==========
     print(f"📝 No authentication found - showing login page")
     auth_url = google_oauth.get_authorization_url()
