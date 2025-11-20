@@ -14,32 +14,31 @@ BACKGROUND_LIGHT = "#F0FDFA"
 TEXT_PRIMARY = "#0F172A"
 TEXT_SECONDARY = "#475569"
 
-TOKEN_STORAGE_FILE = ".streamlit_auth_tokens_user.json"
-BROWSER_ID_FILE = ".streamlit_browser_id.txt"
+TOKEN_STORAGE_FILE = ".streamlit_auth_tokens_cbe_user.json"
 
 # ==================== BROWSER IDENTIFIER ====================
 def get_browser_identifier():
     """
-    Generate and store a persistent browser identifier.
-    This survives page refreshes and identifies the device/browser.
+    Generate a persistent browser identifier that survives refreshes.
+    Uses session state with fallback to query params for persistence.
     """
-    if os.path.exists(BROWSER_ID_FILE):
-        try:
-            with open(BROWSER_ID_FILE, "r") as f:
-                return f.read().strip()
-        except:
-            pass
+    if 'browser_id' not in st.session_state:
+        # Check if we have a browser ID in query params (for refresh persistence)
+        params = st.query_params
+        if 'bid' in params:
+            browser_id = params['bid']
+            st.session_state.browser_id = browser_id
+            print(f"🔍 Restored browser ID from query params: {browser_id}")
+        else:
+            # Generate new browser ID
+            import uuid
+            browser_id = str(uuid.uuid4())
+            st.session_state.browser_id = browser_id
+            # Store in query params for refresh persistence
+            st.query_params['bid'] = browser_id
+            print(f"🆕 Generated new browser ID: {browser_id}")
     
-    # Generate new browser ID if not exists
-    import uuid
-    browser_id = str(uuid.uuid4())
-    try:
-        with open(BROWSER_ID_FILE, "w") as f:
-            f.write(browser_id)
-    except:
-        pass
-    
-    return browser_id
+    return st.session_state.browser_id
 
 # ==================== GOOGLE OAUTH CLASS ====================
 class GoogleOAuth:
@@ -146,7 +145,7 @@ def save_tokens_to_file(tokens, user_info, browser_id):
         with open(TOKEN_STORAGE_FILE, "w") as f:
             json.dump(all_users_data, f, indent=2)
         
-        print(f"✅ Saved tokens for user: {user_email} on browser: {browser_id[:8]}")
+        print(f"✅ Saved tokens for user: {user_email} on browser: {browser_id}")
         return True
         
     except Exception as e:
@@ -177,6 +176,7 @@ def load_tokens_from_file(user_email):
                 save_all_users_data(all_users_data)
                 return {"tokens": tokens, "user_info": user_info}
             else:
+                # Session expired, remove it
                 del all_users_data[user_email]
                 save_all_users_data(all_users_data)
         
@@ -196,6 +196,7 @@ def validate_user_session(tokens, user_info):
     
     expires_at = tokens.get("expires_at")
     if expires_at and time.time() > expires_at:
+        print("🔄 Session expired, attempting refresh...")
         google_oauth = GoogleOAuth()
         refresh_token = tokens.get("refresh_token")
         
@@ -203,11 +204,11 @@ def validate_user_session(tokens, user_info):
             new_tokens = google_oauth.refresh_access_token(refresh_token)
             if new_tokens:
                 new_tokens['refresh_token'] = refresh_token
-                save_tokens_to_file(new_tokens, user_info, "")
-                return True
+                # We'll save this later when we have the browser ID
+                return new_tokens
         return False
     
-    return True
+    return tokens
 
 def save_all_users_data(all_users_data):
     """Helper function to save all users data"""
@@ -297,10 +298,14 @@ def logout():
     if st.session_state.get('google_user'):
         user_email = st.session_state.google_user.get('email')
     
+    # Clear query params
+    if 'bid' in st.query_params:
+        st.query_params.clear()
+    
     keys_to_clear = [
         'google_authenticated', 'google_user', 'google_access_token',
         'google_refresh_token', 'session_start_time', 'token_expires_at',
-        'current_user_email'
+        'current_user_email', 'browser_id'
     ]
     
     for key in keys_to_clear:
@@ -314,10 +319,9 @@ def logout():
 
 def restore_session_from_storage(browser_id):
     """
-    ✅ FIXED: Restore user session from file without depending on session_state
-    This is called on every page load/refresh
+    ✅ FIXED: Restore user session from file that survives refreshes
     """
-    print(f"🔍 Attempting to restore session for browser: {browser_id[:8]}")
+    print(f"🔍 Attempting to restore session for browser: {browser_id}")
     
     # Step 1: Try to find user by browser ID
     user_email = find_user_by_browser(browser_id)
@@ -330,37 +334,50 @@ def restore_session_from_storage(browser_id):
             tokens = stored_auth["tokens"]
             user_info = stored_auth["user_info"]
             
-            print(f"✅ Successfully restored session for: {user_email}")
+            # Validate and potentially refresh tokens
+            validated_tokens = validate_user_session(tokens, user_info)
             
-            # Restore to session state
-            st.session_state.google_authenticated = True
-            st.session_state.google_user = user_info
-            st.session_state.google_access_token = tokens.get("access_token")
-            st.session_state.session_start_time = time.time()
-            st.session_state.current_user_email = user_email
-            
-            if 'refresh_token' in tokens:
-                st.session_state.google_refresh_token = tokens['refresh_token']
-            if 'expires_at' in tokens:
-                st.session_state.token_expires_at = tokens['expires_at']
-            
-            return True
+            if validated_tokens:
+                # If tokens were refreshed, update storage
+                if validated_tokens != tokens:
+                    print("🔄 Tokens refreshed during restoration")
+                    save_tokens_to_file(validated_tokens, user_info, browser_id)
+                    tokens = validated_tokens
+                
+                print(f"✅ Successfully restored session for: {user_email}")
+                
+                # Restore to session state
+                st.session_state.google_authenticated = True
+                st.session_state.google_user = user_info
+                st.session_state.google_access_token = tokens.get("access_token")
+                st.session_state.session_start_time = time.time()
+                st.session_state.current_user_email = user_email
+                
+                if 'refresh_token' in tokens:
+                    st.session_state.google_refresh_token = tokens['refresh_token']
+                if 'expires_at' in tokens:
+                    st.session_state.token_expires_at = tokens['expires_at']
+                
+                return True
+            else:
+                print("❌ Session validation failed during restoration")
     
     print(f"   No valid session found for this browser")
     return False
 
 def check_google_auth():
-    """Check if user is authenticated with Google - FIXED VERSION"""
+    """Check if user is authenticated with Google - REFRESH-RESISTANT VERSION"""
     google_oauth = GoogleOAuth()
     params = st.query_params
     browser_id = get_browser_identifier()
 
     print(f"\n{'='*60}")
-    print(f"🔐 AUTH CHECK - Browser: {browser_id[:8]}")
+    print(f"🔐 AUTH CHECK - Browser: {browser_id}")
+    print(f"📊 Query params: {dict(params)}")
     print(f"{'='*60}")
 
     # ========== STEP 1: HANDLE OAUTH CALLBACK ==========
-    if "code" in params:
+    if "code" in params and "bid" not in params:
         print(f"✅ OAuth callback detected - code received")
         code = params["code"]
         
@@ -423,7 +440,9 @@ def check_google_auth():
                 # ✅ SAVE WITH BROWSER ID
                 save_tokens_to_file(tokens, user_info, browser_id)
                 
+                # Clear only the code param, keep bid
                 st.query_params.clear()
+                st.query_params['bid'] = browser_id
                 st.rerun()
                 return True
         
@@ -440,10 +459,10 @@ def check_google_auth():
             return True
         else:
             print(f"⏰ Session expired")
-            logout()
-            return False
+            # Try to refresh from storage instead of immediate logout
+            pass
 
-    # ========== STEP 3: RESTORE FROM PERSISTENT STORAGE ✅ FIXED ==========
+    # ========== STEP 3: RESTORE FROM PERSISTENT STORAGE ==========
     print(f"🔍 Checking persistent storage...")
     if restore_session_from_storage(browser_id):
         return True
