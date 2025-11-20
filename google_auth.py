@@ -170,150 +170,150 @@ def logout():
     delete_tokens_from_file()
     st.rerun()
 
-# def check_google_auth():
-#     """Check if user is authenticated with Google - with persistent storage"""
-#     google_oauth = GoogleOAuth()
-#     params = st.query_params
+def check_google_auth():
+    """Check if user is authenticated with Google - with persistent storage"""
+    google_oauth = GoogleOAuth()
+    params = st.query_params
 
-#     # DEBUG: Print initialization
-#     print(f"🔍 DEBUG - Auth Check Started")
-#     print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
-#     print(f"   query_params: {params}")
+    # DEBUG: Print initialization
+    print(f"🔍 DEBUG - Auth Check Started")
+    print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
+    print(f"   query_params: {params}")
 
-#     # ========== HANDLE OAUTH CALLBACK ==========
-#     if "code" in params:
-#         print(f"✅ OAuth callback detected - code present in params")
-#         code = params["code"]
-#         print(f"   code: {code[:30]}...")
+    # ========== HANDLE OAUTH CALLBACK ==========
+    if "code" in params:
+        print(f"✅ OAuth callback detected - code present in params")
+        code = params["code"]
+        print(f"   code: {code[:30]}...")
         
-#         # Show loading screen
-#         st.markdown("""
-#         <style>
-#         .auth-loading {
-#             display: flex;
-#             flex-direction: column;
-#             align-items: center;
-#             justify-content: center;
-#             height: 100vh;
-#             background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 100%);
-#             gap: 2rem;
-#         }
-#         .spinner {
-#             width: 60px;
-#             height: 60px;
-#             border: 4px solid #E0E7FF;
-#             border-top: 4px solid #0F766E;
-#             border-radius: 50%;
-#             animation: spin 1s linear infinite;
-#         }
-#         @keyframes spin {
-#             0% { transform: rotate(0deg); }
-#             100% { transform: rotate(360deg); }
-#         }
-#         .auth-text {
-#             font-size: 1.2rem;
-#             color: #0F766E;
-#             font-weight: 600;
-#         }
-#         </style>
-#         <div class="auth-loading">
-#             <div class="spinner"></div>
-#             <div class="auth-text">✨ Authenticating with Google...</div>
-#             <p style="color: #475569;">Please wait while we verify your credentials</p>
-#         </div>
-#         """, unsafe_allow_html=True)
+        # Show loading screen
+        st.markdown("""
+        <style>
+        .auth-loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 100%);
+            gap: 2rem;
+        }
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid #E0E7FF;
+            border-top: 4px solid #0F766E;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .auth-text {
+            font-size: 1.2rem;
+            color: #0F766E;
+            font-weight: 600;
+        }
+        </style>
+        <div class="auth-loading">
+            <div class="spinner"></div>
+            <div class="auth-text">✨ Authenticating with Google...</div>
+            <p style="color: #475569;">Please wait while we verify your credentials</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-#         # Get tokens
-#         print(f"🔄 Exchanging code for tokens...")
-#         tokens = google_oauth.get_tokens(code)
+        # Get tokens
+        print(f"🔄 Exchanging code for tokens...")
+        tokens = google_oauth.get_tokens(code)
         
-#         if tokens and "access_token" in tokens:
-#             print(f"✅ Tokens received, fetching user info...")
-#             user_info = google_oauth.get_user_info(tokens["access_token"])
+        if tokens and "access_token" in tokens:
+            print(f"✅ Tokens received, fetching user info...")
+            user_info = google_oauth.get_user_info(tokens["access_token"])
             
-#             if user_info:
-#                 print(f"✅ User info received: {user_info.get('email')}")
+            if user_info:
+                print(f"✅ User info received: {user_info.get('email')}")
                 
-#                 # Store in session state
-#                 st.session_state.google_authenticated = True
-#                 st.session_state.google_user = user_info
-#                 st.session_state.google_access_token = tokens["access_token"]
-#                 st.session_state.session_start_time = time.time()
+                # Store in session state
+                st.session_state.google_authenticated = True
+                st.session_state.google_user = user_info
+                st.session_state.google_access_token = tokens["access_token"]
+                st.session_state.session_start_time = time.time()
                 
-#                 if 'refresh_token' in tokens:
-#                     st.session_state.google_refresh_token = tokens['refresh_token']
-#                 if 'expires_at' in tokens:
-#                     st.session_state.token_expires_at = tokens['expires_at']
+                if 'refresh_token' in tokens:
+                    st.session_state.google_refresh_token = tokens['refresh_token']
+                if 'expires_at' in tokens:
+                    st.session_state.token_expires_at = tokens['expires_at']
                 
-#                 # Save to persistent file
-#                 print(f"💾 Saving tokens to file...")
-#                 save_tokens_to_file(tokens, user_info)
+                # Save to persistent file
+                print(f"💾 Saving tokens to file...")
+                save_tokens_to_file(tokens, user_info)
                 
-#                 # Clear query params
-#                 print(f"🧹 Clearing query params...")
-#                 st.query_params.clear()
+                # Clear query params
+                print(f"🧹 Clearing query params...")
+                st.query_params.clear()
                 
-#                 # Redirect
-#                 print(f"🔄 Redirecting to homepage...")
-#                 st.markdown("""
-#                 <script>
-#                 window.location.replace(window.location.origin + window.location.pathname);
-#                 </script>
-#                 """, unsafe_allow_html=True)
+                # Redirect
+                print(f"🔄 Redirecting to homepage...")
+                st.markdown("""
+                <script>
+                window.location.replace(window.location.origin + window.location.pathname);
+                </script>
+                """, unsafe_allow_html=True)
                 
-#                 st.rerun()
-#                 return True
-#             else:
-#                 print(f"❌ Failed to get user info")
-#         else:
-#             print(f"❌ Failed to exchange code for tokens")
+                st.rerun()
+                return True
+            else:
+                print(f"❌ Failed to get user info")
+        else:
+            print(f"❌ Failed to exchange code for tokens")
         
-#         st.error("❌ Authentication failed. Please try again.")
-#         return False
+        st.error("❌ Authentication failed. Please try again.")
+        return False
 
-#     # ========== CHECK SESSION STATE ==========
-#     if st.session_state.get("google_authenticated"):
-#         print(f"✅ User already in session state")
-#         session_start = st.session_state.get("session_start_time")
-#         if session_start and (time.time() - session_start) < (2 * 60 * 60):
-#             print(f"✅ Session still valid")
-#             return True
-#         else:
-#             print(f"⏰ Session expired - logging out")
-#             logout()
-#             return False
+    # ========== CHECK SESSION STATE ==========
+    if st.session_state.get("google_authenticated"):
+        print(f"✅ User already in session state")
+        session_start = st.session_state.get("session_start_time")
+        if session_start and (time.time() - session_start) < (2 * 60 * 60):
+            print(f"✅ Session still valid")
+            return True
+        else:
+            print(f"⏰ Session expired - logging out")
+            logout()
+            return False
 
-#     # ========== CHECK PERSISTENT STORAGE ==========
-#     print(f"🔍 Checking persistent storage...")
-#     stored_auth = load_tokens_from_file()
-#     if stored_auth:
-#         print(f"✅ Found stored tokens - restoring...")
-#         tokens = stored_auth["tokens"]
-#         user_info = stored_auth["user_info"]
+    # ========== CHECK PERSISTENT STORAGE ==========
+    print(f"🔍 Checking persistent storage...")
+    stored_auth = load_tokens_from_file()
+    if stored_auth:
+        print(f"✅ Found stored tokens - restoring...")
+        tokens = stored_auth["tokens"]
+        user_info = stored_auth["user_info"]
         
-#         # Restore session state
-#         st.session_state.google_authenticated = True
-#         st.session_state.google_user = user_info
-#         st.session_state.google_access_token = tokens["access_token"]
-#         st.session_state.session_start_time = time.time()
+        # Restore session state
+        st.session_state.google_authenticated = True
+        st.session_state.google_user = user_info
+        st.session_state.google_access_token = tokens["access_token"]
+        st.session_state.session_start_time = time.time()
         
-#         if 'refresh_token' in tokens:
-#             st.session_state.google_refresh_token = tokens['refresh_token']
-#         if 'expires_at' in tokens:
-#             st.session_state.token_expires_at = tokens['expires_at']
+        if 'refresh_token' in tokens:
+            st.session_state.google_refresh_token = tokens['refresh_token']
+        if 'expires_at' in tokens:
+            st.session_state.token_expires_at = tokens['expires_at']
         
-#         print(f"✅ Restored from storage")
-#         return True
+        print(f"✅ Restored from storage")
+        return True
 
-#     # ========== SHOW LOGIN PAGE ==========
-#     print(f"📝 No authentication found - showing login page")
-#     if not st.session_state.get("google_authenticated"):
-#         auth_url = google_oauth.get_authorization_url()
-#         print(f"   Auth URL: {auth_url[:100]}...")
-#         show_login_page(auth_url)
-#         return False
+    # ========== SHOW LOGIN PAGE ==========
+    print(f"📝 No authentication found - showing login page")
+    if not st.session_state.get("google_authenticated"):
+        auth_url = google_oauth.get_authorization_url()
+        print(f"   Auth URL: {auth_url[:100]}...")
+        show_login_page(auth_url)
+        return False
 
-#     return False
+    return False
 
 def check_google_auth():
     """
