@@ -4,18 +4,44 @@ from urllib.parse import urlencode
 import time
 import json
 import os
+import hashlib
 
 # Color palette
-PRIMARY_COLOR = "#0F766E"      # Teal
-SECONDARY_COLOR = "#06B6D4"    # Cyan
-ACCENT_COLOR = "#10B981"       # Emerald
-BACKGROUND_LIGHT = "#F0FDFA"   # Light teal
-TEXT_PRIMARY = "#0F172A"       # Slate
-TEXT_SECONDARY = "#475569"     # Slate gray
+PRIMARY_COLOR = "#0F766E"
+SECONDARY_COLOR = "#06B6D4"
+ACCENT_COLOR = "#10B981"
+BACKGROUND_LIGHT = "#F0FDFA"
+TEXT_PRIMARY = "#0F172A"
+TEXT_SECONDARY = "#475569"
 
-# File to store tokens persistently
-TOKEN_STORAGE_FILE = ".streamlit_auth_tokens.json"
+TOKEN_STORAGE_FILE = ".streamlit_auth_tokens_user.json"
+BROWSER_ID_FILE = ".streamlit_browser_id.txt"
 
+# ==================== BROWSER IDENTIFIER ====================
+def get_browser_identifier():
+    """
+    Generate and store a persistent browser identifier.
+    This survives page refreshes and identifies the device/browser.
+    """
+    if os.path.exists(BROWSER_ID_FILE):
+        try:
+            with open(BROWSER_ID_FILE, "r") as f:
+                return f.read().strip()
+        except:
+            pass
+    
+    # Generate new browser ID if not exists
+    import uuid
+    browser_id = str(uuid.uuid4())
+    try:
+        with open(BROWSER_ID_FILE, "w") as f:
+            f.write(browser_id)
+    except:
+        pass
+    
+    return browser_id
+
+# ==================== GOOGLE OAUTH CLASS ====================
 class GoogleOAuth:
     def __init__(self):
         self.client_id = st.secrets["client_id"]
@@ -47,8 +73,6 @@ class GoogleOAuth:
             "grant_type": "authorization_code",
             "redirect_uri": self.redirect_uri,
         }
-        # Debug: Print the redirect_uri being used
-        print(f"DEBUG: Using redirect_uri: {self.redirect_uri}")
         
         r = requests.post(token_url, data=data)
         if r.status_code == 200:
@@ -59,8 +83,6 @@ class GoogleOAuth:
                 tokens['expires_at'] = time.time() + (2 * 60 * 60)
             return tokens
         
-        # Debug: Print error details
-        print(f"DEBUG: Token error - Status: {r.status_code}, Response: {r.text}")
         st.error(f"Failed to get tokens: {r.text}")
         return None
     
@@ -115,8 +137,9 @@ def save_tokens_to_file(tokens, user_info):
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f)
         return True
+        
     except Exception as e:
-        print(f"Error saving tokens: {e}")
+        print(f"❌ Error saving tokens: {e}")
         return False
     
 
@@ -183,7 +206,7 @@ def delete_tokens_from_file():
             os.remove(filename)
         return True
     except Exception as e:
-        print(f"Error deleting tokens: {e}")
+        print(f"❌ Error deleting tokens: {e}")
         return False
 
 #def save_tokens_to_file(tokens, user_info):
@@ -250,7 +273,13 @@ def delete_tokens_from_file():
 # ==================== AUTH FUNCTIONS ====================
 
 def logout():
-    """Enhanced logout - clear all session data and stored tokens"""
+    """Enhanced logout - clear session and mark tokens as inactive for current user"""
+    browser_id = get_browser_identifier()
+    current_user = st.session_state.get("current_user_email")
+    
+    if current_user:
+        mark_session_inactive(current_user, browser_id)
+    
     keys_to_clear = [
         'google_authenticated', 'google_user', 'google_access_token',
         'google_refresh_token', 'session_start_time', 'token_expires_at',
@@ -268,84 +297,113 @@ def logout():
     
     st.rerun()
 
+def restore_session_from_storage(browser_id):
+    """
+    ✅ Restore user session from USER-SPECIFIC + BROWSER-SPECIFIC file
+    This finds the most recently active session for this browser
+    """
+    print(f"\n🔍 Attempting to restore session for browser: {browser_id[:8]}")
+    
+    stored_auth = load_tokens_from_file(browser_id)
+    
+    if stored_auth and stored_auth.get("is_active", False):
+        tokens = stored_auth["tokens"]
+        user_info = stored_auth["user_info"]
+        user_email = user_info.get("email", "Unknown")
+        
+        print(f"✅ Successfully restored session for: {user_email}")
+        
+        # Restore to session state
+        st.session_state.google_authenticated = True
+        st.session_state.google_user = user_info
+        st.session_state.google_access_token = tokens.get("access_token")
+        st.session_state.session_start_time = time.time()
+        st.session_state.current_user_email = user_email
+        
+        if 'refresh_token' in tokens:
+            st.session_state.google_refresh_token = tokens['refresh_token']
+        if 'expires_at' in tokens:
+            st.session_state.token_expires_at = tokens['expires_at']
+        
+        return True
+    
+    print(f"   ❌ No valid active session found for this browser")
+    return False
+
 def check_google_auth():
-    """Check if user is authenticated with Google - with persistent storage"""
+    """Check if user is authenticated with Google - MULTI-USER FIXED VERSION"""
     google_oauth = GoogleOAuth()
     params = st.query_params
+    browser_id = get_browser_identifier()
 
-    # DEBUG: Print initialization
-    print(f"🔍 DEBUG - Auth Check Started")
-    print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
-    print(f"   query_params: {params}")
+    print(f"\n{'='*60}")
+    print(f"🔐 AUTH CHECK - Browser: {browser_id[:8]}")
+    print(f"📊 Active users for this browser: {len(get_all_user_token_files(browser_id))}")
+    print(f"{'='*60}")
 
-    # ========== HANDLE OAUTH CALLBACK ==========
+    # ========== STEP 1: HANDLE OAUTH CALLBACK ==========
     if "code" in params:
-        print(f"✅ OAuth callback detected - code present in params")
+        print(f"✅ OAuth callback detected - code received")
         code = params["code"]
-        print(f"   code: {code[:30]}...")
         
-        # Show loading screen
-        st.markdown("""
+        st.markdown(f"""
         <style>
-        .auth-loading {
+        .auth-loading {{
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100vh;
-            background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 100%);
+            background: linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #CCFBF1 100%);
             gap: 2rem;
-        }
-        .spinner {
+        }}
+        .spinner {{
             width: 60px;
             height: 60px;
             border: 4px solid #E0E7FF;
-            border-top: 4px solid #0F766E;
+            border-top: 4px solid {PRIMARY_COLOR};
             border-radius: 50%;
             animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .auth-text {
+        }}
+        @keyframes spin {{
+            0% {{ transform: rotate(0deg); }}
+            100% {{ transform: rotate(360deg); }}
+        }}
+        .auth-text {{
             font-size: 1.2rem;
-            color: #0F766E;
+            color: {PRIMARY_COLOR};
             font-weight: 600;
-        }
+        }}
         </style>
         <div class="auth-loading">
             <div class="spinner"></div>
             <div class="auth-text">✨ Authenticating with Google...</div>
-            <p style="color: #475569;">Please wait while we verify your credentials</p>
+            <p style="color: {TEXT_SECONDARY};">Please wait while we verify your credentials</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Get tokens
-        print(f"🔄 Exchanging code for tokens...")
         tokens = google_oauth.get_tokens(code)
         
         if tokens and "access_token" in tokens:
-            print(f"✅ Tokens received, fetching user info...")
             user_info = google_oauth.get_user_info(tokens["access_token"])
             
             if user_info:
-                print(f"✅ User info received: {user_info.get('email')}")
+                user_email = user_info.get('email')
+                print(f"   ✅ User authenticated: {user_email}")
                 
-                # Store in session state
                 st.session_state.google_authenticated = True
                 st.session_state.google_user = user_info
                 st.session_state.google_access_token = tokens["access_token"]
                 st.session_state.session_start_time = time.time()
+                st.session_state.current_user_email = user_email
                 
                 if 'refresh_token' in tokens:
                     st.session_state.google_refresh_token = tokens['refresh_token']
                 if 'expires_at' in tokens:
                     st.session_state.token_expires_at = tokens['expires_at']
                 
-                # Save to persistent file
-                print(f"💾 Saving tokens to file...")
-                save_tokens_to_file(tokens, user_info)
+                # ✅ SAVE TO USER-SPECIFIC + BROWSER-SPECIFIC FILE
+                save_tokens_to_file(tokens, user_info, browser_id)
                 
                 # --- MODIFIED: Set Session ID in URL instead of JS Redirect ---
                 print(f"🧹 Setting session ID in URL...")
@@ -363,15 +421,11 @@ def check_google_auth():
                 # Rerun to update URL
                 st.rerun()
                 return True
-            else:
-                print(f"❌ Failed to get user info")
-        else:
-            print(f"❌ Failed to exchange code for tokens")
         
         st.error("❌ Authentication failed. Please try again.")
         return False
 
-    # ========== CHECK SESSION STATE ==========
+    # ========== STEP 2: CHECK SESSION STATE (FAST PATH) ==========
     if st.session_state.get("google_authenticated"):
         print(f"✅ User already in session state")
         
@@ -384,11 +438,13 @@ def check_google_auth():
                 st.query_params["session"] = session_hash
         
         session_start = st.session_state.get("session_start_time")
+        current_user = st.session_state.get("current_user_email")
+        
         if session_start and (time.time() - session_start) < (2 * 60 * 60):
-            print(f"✅ Session still valid")
+            print(f"✅ Valid in-memory session for: {current_user}")
             return True
         else:
-            print(f"⏰ Session expired - logging out")
+            print(f"⏰ Session expired")
             logout()
             return False
 
@@ -419,15 +475,11 @@ def check_google_auth():
         
         print(f"✅ Restored from storage")
         return True
-
-    # ========== SHOW LOGIN PAGE ==========
-    print(f"📝 No authentication found - showing login page")
-    if not st.session_state.get("google_authenticated"):
-        auth_url = google_oauth.get_authorization_url()
-        print(f"   Auth URL: {auth_url[:100]}...")
-        show_login_page(auth_url)
-        return False
-
+    
+    # ========== STEP 4: NO VALID AUTH FOUND ==========
+    print(f"📝 No authentication found - showing login page\n")
+    auth_url = google_oauth.get_authorization_url()
+    show_login_page(auth_url)
     return False
 
 def show_login_page(auth_url):
@@ -465,7 +517,7 @@ def show_login_page(auth_url):
         }}
         
         .stApp {{
-            background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 100%);
+            background: linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #CCFBF1 100%);
         }}
         
         .login-card {{
@@ -605,7 +657,7 @@ def show_login_page(auth_url):
             </a>
             <div class="security-badge">
                 <span class="security-icon">🛡️</span>
-                Secure OAuth 2.0 Authentication • 2-Hour Session
+                Secure OAuth 2.0 Authentication • Multi-User Support
             </div>
         </div>
         """,
