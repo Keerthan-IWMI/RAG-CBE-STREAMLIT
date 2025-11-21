@@ -288,14 +288,14 @@ def load_custom_css():
     }}
     
     [data-testid="stSidebar"] > div:first-child {{
-        padding-top: 1.5rem;
+        padding-top: 0rem;
     }}
     
     .sidebar-title {{
         font-size: 1.3rem;
         font-weight: 700;
         color: {PRIMARY_COLOR};
-        margin-bottom: 1rem;
+        margin-bottom: 0rem;
         display: flex;
         align-items: center;
         gap: 0.5rem;
@@ -303,9 +303,9 @@ def load_custom_css():
     
     .sidebar-section {{
         background: white;
-        padding: 0.75rem;
+        padding: 0rem;
         border-radius: 10px;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0rem;
         border: 1px solid #E2E8F0;
     }}
     
@@ -315,7 +315,7 @@ def load_custom_css():
         background: linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%);
         color: white;
         border: none;
-        padding: 0.6rem 1rem;
+        padding: 0rem;
         border-radius: 10px;
         font-weight: 600;
         font-size: 0.85rem;
@@ -504,8 +504,8 @@ def load_custom_css():
     .profile-card {{
         background: linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%);
         border-radius: 16px;
-        padding: 1.25rem;
-        margin-bottom: 1.5rem;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
         text-align: center;
         box-shadow: 0 8px 24px rgba(15, 118, 110, 0.2);
         position: relative;
