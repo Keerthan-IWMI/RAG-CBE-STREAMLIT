@@ -6,6 +6,9 @@ from io import BytesIO
 from fpdf import FPDF
 import hashlib
 import requests #for Whisper
+from streamlit_chat_widget import chat_input_widget
+from streamlit_float import float_init
+
 
 # Import RAG pipeline
 from rag_pipeline import RAGPipeline
@@ -692,14 +695,10 @@ def transcribe_audio(audio_bytes):
     }
     
     try:
-        # st.audio_input returns a BytesIO object
-        data = audio_bytes.getvalue()
-        
-        response = requests.post(API_URL, headers=headers, data=data)
+        response = requests.post(API_URL, headers=headers, data=audio_bytes)
         
         if response.status_code == 200:
             result = response.json()
-            # Handle response - usually {"text": "..."}
             return result.get("text", "").strip()
         else:
             st.error(f"Transcription failed: {response.status_code} - {response.text}")
@@ -818,6 +817,9 @@ def main():
     
     load_custom_css()
     init_session_state()
+    
+    # Initialize float for fixed positioning
+    float_init()
 
     # JS helper: smooth scroll + highlight the target card
     st.markdown("""
@@ -1005,33 +1007,6 @@ def main():
         
         # Divider
         st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
-
-        st.markdown('<h4 class="control-panel-header">Voice Input (Experimental)</h4>', unsafe_allow_html=True)
-        
-        # Voice Input - without section box
-        st.markdown('<div class="section-content">', unsafe_allow_html=True)
-        
-        audio_value = st.audio_input("Record a voice message")
-        voice_prompt = None
-
-        if audio_value:
-            # Check if we've already processed this specific audio input to avoid loops
-            current_audio_bytes = audio_value.getvalue()
-            if "last_audio_bytes" not in st.session_state or st.session_state.last_audio_bytes != current_audio_bytes:
-                with st.spinner("Transcribing voice..."):
-                    transcribed_text = transcribe_audio(audio_value)
-                    if transcribed_text:
-                        voice_prompt = transcribed_text
-                        st.session_state.last_audio_bytes = current_audio_bytes
-                        st.success(f"🗣️ Heard: {voice_prompt}")
-            else:
-                # Audio exists but already processed, just play it
-                st.audio(audio_value)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-                
-        # Divider
-        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
         
         # About Section
         with st.expander("ℹ️ About CircularIQ"):
@@ -1150,12 +1125,41 @@ def main():
                             <div class="reference-content">{text[:300]}...</div>
                         </div>
                         """, unsafe_allow_html=True)
-    
-    # Chat input
-    chat_input = st.chat_input("💬 Ask me about circular bioeconomy, waste management, or sustainable practices...")
 
-    # Determine the final prompt (either from text input or voice transcription)
-    prompt = chat_input if chat_input else voice_prompt
+    # ===== Custom Chat Input Widget (Fixed at Bottom) =====
+    footer_container = st.container()
+    with footer_container:
+        # Use message count as key to reset widget after each send
+        widget_key = f"chat_widget_{len(st.session_state.messages)}"
+        user_input = chat_input_widget(key=widget_key)
+    
+    # Float the container - transparent background, pointer-events: none allows scrolling through it
+    footer_container.float("bottom: 0px; background-color: transparent; padding: 10px 0; pointer-events: none;")
+    
+    # Re-enable pointer events for the widget inside using CSS
+    st.markdown("""
+    <style>
+    [data-testid="stVerticalBlock"] > div:has(iframe[title*="chat_input_widget"]) {
+        pointer-events: auto !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Process user input from custom widget (text or audio)
+    prompt = None
+    
+    if user_input:
+        if "text" in user_input and user_input["text"]:
+            # Text input from typing
+            prompt = user_input["text"]
+        elif "audioFile" in user_input:
+            # Audio input from recording
+            audio_bytes = bytes(user_input["audioFile"])
+            with st.spinner("🎙️ Transcribing audio..."):
+                transcribed_text = transcribe_audio(audio_bytes)
+                if transcribed_text:
+                    prompt = transcribed_text
+                    st.info(f"📝 Transcribed: {prompt}")
 
     if prompt:
         # Add user message to session state
@@ -1172,7 +1176,8 @@ def main():
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer,
-                    "references": references
+                    "references": references,
+                    "msg_id": msg_id
                 })
                 st.session_state.total_queries += 1
             
@@ -1181,7 +1186,8 @@ def main():
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": error_msg,
-                    "references": []
+                    "references": [],
+                    "msg_id": f"msg-{len(st.session_state.messages)}"
                 })
         
         # Save chat history to file after each message
