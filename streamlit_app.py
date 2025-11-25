@@ -976,6 +976,24 @@ def main():
         
         # Divider
         st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
+        st.markdown('<h4 class="control-panel-header">Voice Input (Experimental)</h4>', unsafe_allow_html=True)
+        
+        # Voice Input - without section box
+        st.markdown('<div class="section-content">', unsafe_allow_html=True)
+        
+        audio_value = st.audio_input("Record a voice message")
+        
+        if audio_value:
+            st.audio(audio_value)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Divider
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+                
+        # Divider
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
         
         # About Section
         with st.expander("ℹ️ About CircularIQ"):
