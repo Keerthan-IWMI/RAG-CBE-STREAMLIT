@@ -5,6 +5,7 @@ import os
 from io import BytesIO
 from fpdf import FPDF
 import hashlib
+import requests #for Whisper
 
 # Import RAG pipeline
 from rag_pipeline import RAGPipeline
@@ -679,6 +680,34 @@ def get_user_initial(name: str) -> str:
         return name[0].upper()
     return "U"
 
+def transcribe_audio(audio_bytes):
+    """Transcribe audio using Hugging Face Whisper API"""
+    if not audio_bytes:
+        return None
+        
+    API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "audio/wav" 
+    }
+    
+    try:
+        # st.audio_input returns a BytesIO object
+        data = audio_bytes.getvalue()
+        
+        response = requests.post(API_URL, headers=headers, data=data)
+        
+        if response.status_code == 200:
+            result = response.json()
+            # Handle response - usually {"text": "..."}
+            return result.get("text", "").strip()
+        else:
+            st.error(f"Transcription failed: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Error connecting to transcription service: {e}")
+        return None
+
 def clean_text_for_pdf(text):
     """Clean text to remove problematic characters for latin-1 encoding"""
     replacements = {
@@ -983,14 +1012,23 @@ def main():
         st.markdown('<div class="section-content">', unsafe_allow_html=True)
         
         audio_value = st.audio_input("Record a voice message")
-        
+        voice_prompt = None
+
         if audio_value:
-            st.audio(audio_value)
+            # Check if we've already processed this specific audio input to avoid loops
+            current_audio_bytes = audio_value.getvalue()
+            if "last_audio_bytes" not in st.session_state or st.session_state.last_audio_bytes != current_audio_bytes:
+                with st.spinner("Transcribing voice..."):
+                    transcribed_text = transcribe_audio(audio_value)
+                    if transcribed_text:
+                        voice_prompt = transcribed_text
+                        st.session_state.last_audio_bytes = current_audio_bytes
+                        st.success(f"🗣️ Heard: {voice_prompt}")
+            else:
+                # Audio exists but already processed, just play it
+                st.audio(audio_value)
         
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Divider
-        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
                 
         # Divider
         st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
@@ -1114,7 +1152,12 @@ def main():
                         """, unsafe_allow_html=True)
     
     # Chat input
-    if prompt := st.chat_input("💬 Ask me about circular bioeconomy, waste management, or sustainable practices..."):
+    chat_input = st.chat_input("💬 Ask me about circular bioeconomy, waste management, or sustainable practices...")
+
+    # Determine the final prompt (either from text input or voice transcription)
+    prompt = chat_input if chat_input else voice_prompt
+
+    if prompt:
         # Add user message to session state
         st.session_state.messages.append({"role": "user", "content": prompt})
         
