@@ -6,6 +6,7 @@ from io import BytesIO
 from fpdf import FPDF
 import hashlib
 import requests #for Whisper
+import base64
 from streamlit_chat_widget import chat_input_widget
 from streamlit_float import float_init
 
@@ -60,17 +61,27 @@ def save_chat_history(email: str, messages: list, total_queries: int, model: str
                 "content": msg["content"]
             }
             
-            # Convert Document objects to dictionaries
+            # Convert Document-like objects or dicts to dictionaries
+            refs = []
             if "references" in msg and msg["references"]:
-                msg_copy["references"] = [
-                    {
-                        "page_content": doc.page_content,
-                        "metadata": doc.metadata
-                    }
-                    for doc in msg["references"]
-                ]
-            else:
-                msg_copy["references"] = []
+                for doc in msg["references"]:
+                    try:
+                        if isinstance(doc, dict):
+                            # Already a dict; copy safe keys
+                            page_content = doc.get("page_content", "")
+                            metadata = doc.get("metadata", {})
+                        else:
+                            # Assume object with page_content and metadata attributes
+                            page_content = getattr(doc, "page_content", "")
+                            metadata = getattr(doc, "metadata", {})
+                        refs.append({"page_content": page_content, "metadata": metadata})
+                    except Exception:
+                        # Fallback: stringify the doc to avoid failing the entire save
+                        try:
+                            refs.append({"page_content": str(doc), "metadata": {}})
+                        except Exception:
+                            refs.append({"page_content": "", "metadata": {}})
+            msg_copy["references"] = refs
             
             serializable_messages.append(msg_copy)
         
@@ -1153,17 +1164,45 @@ def main():
             # Text input from typing
             prompt = user_input["text"]
         elif "audioFile" in user_input:
-            # Audio input from recording
-            audio_bytes = bytes(user_input["audioFile"])
-            with st.spinner("🎙️ Transcribing audio..."):
-                transcribed_text = transcribe_audio(audio_bytes)
-                if transcribed_text:
-                    prompt = transcribed_text
-                    st.info(f"📝 Transcribed: {prompt}")
+            # Audio input from recording: accept multiple serialized formats
+            raw_audio = user_input.get("audioFile")
+            audio_bytes = None
+            try:
+                if isinstance(raw_audio, (bytes, bytearray)):
+                    audio_bytes = bytes(raw_audio)
+                elif isinstance(raw_audio, dict):
+                    # Uint8Array serialized as {"0":v0,"1":v1,...} - values may be int or str
+                    audio_bytes = bytes([int(raw_audio[k]) for k in sorted(raw_audio, key=int)])
+                elif isinstance(raw_audio, (list, tuple)):
+                    audio_bytes = bytes(raw_audio)
+                elif isinstance(raw_audio, str):
+                    # data URL: data:audio/wav;base64,<payload>
+                    if raw_audio.startswith("data:") and "," in raw_audio:
+                        b64 = raw_audio.split(",", 1)[1]
+                        audio_bytes = base64.b64decode(b64)
+                    else:
+                        # attempt base64 decode
+                        try:
+                            audio_bytes = base64.b64decode(raw_audio)
+                        except Exception:
+                            audio_bytes = None
+                else:
+                    audio_bytes = bytes(list(raw_audio))
+            except Exception as e:
+                st.error(f"❌ Failed to parse audio payload: {e}")
+                audio_bytes = None
+            if audio_bytes:
+                with st.spinner("🎙️ Transcribing audio..."):
+                    transcribed_text = transcribe_audio(audio_bytes)
+                    if transcribed_text:
+                        prompt = transcribed_text
+                        st.info(f"📝 Transcribed: {prompt}")
 
     if prompt:
         # Add user message to session state
         st.session_state.messages.append({"role": "user", "content": prompt})
+        # Persist user message immediately to avoid losing it if processing fails
+        save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
         
         # Process with RAG
         with st.spinner("🔍 Analyzing IWMI research documents..."):
