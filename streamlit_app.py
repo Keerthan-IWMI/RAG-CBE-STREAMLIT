@@ -1152,11 +1152,28 @@ def main():
     with footer_container:
         # Use message count as key to reset widget after each send (prevents duplicate re-sends on rerun)
         widget_key = f"chat_widget_{len(st.session_state.messages)}"
-        user_input = chat_input_widget(
-            key=widget_key,
-            pdf_data=pdf_data_b64,
-            pdf_filename=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        )
+        user_input = None
+        try:
+            user_input = chat_input_widget(
+                key=widget_key,
+                pdf_data=pdf_data_b64,
+                pdf_filename=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            )
+        except Exception as e:
+            # Log minimal error info and present fallback so the app remains functional
+            import traceback, sys
+            tb = traceback.format_exc()
+            print("chat_input_widget failed:", e, file=sys.stderr)
+            print(tb, file=sys.stderr)
+            # Show concise, non-sensitive message in the UI and provide the traceback for debugging
+            st.error("⚠️ Custom chat input widget failed to initialize. Falling back to the default chat input.")
+            # (Optional) show debug info only when running locally or if you decide to expose it
+            if os.environ.get("STREAMLIT_SERVER_ENABLE_WS"):  # local/dev heuristic; remove if needed
+                st.text_area("Widget traceback (dev only)", tb, height=200)
+            # Fallback to a simple text input: allow the app to keep working
+            text_fallback = st.chat_input("Start typing here (widget disabled).")
+            if text_fallback:
+                user_input = {"text": text_fallback}
     
     # Float the container - transparent background, pointer-events: none allows scrolling through it
     footer_container.float("bottom: 0px; background-color: transparent; padding: 10px 0; pointer-events: none;")
