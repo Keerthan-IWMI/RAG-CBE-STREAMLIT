@@ -1167,6 +1167,8 @@ def main():
     [data-testid="stVerticalBlock"] > div:has(iframe[title*="chat_input_widget"]) {
         pointer-events: auto !important;
     }
+                
+    
     </style>
     """, unsafe_allow_html=True)
     

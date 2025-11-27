@@ -218,3 +218,36 @@ body {
     font-size: 11px;
   }
 }
+
+/* Remove mouse-click black focus ring – keep keyboard focus ring for accessibility */
+button,
+input,
+textarea,
+a,
+.icon-button,
+.mic-button,
+.react-mic {
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Hide focus outline for mouse click / pointer; keep keyboard focus visible (focus-visible) */
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+.icon-button:focus:not(:focus-visible),
+.mic-button:focus:not(:focus-visible) {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Subtle visible focus for keyboard users */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+.icon-button:focus-visible,
+.mic-button:focus-visible {
+    outline: 2px solid rgba(15,118,110,0.12);
+    box-shadow: 0 0 0 4px rgba(15,118,110,0.06);
+}
