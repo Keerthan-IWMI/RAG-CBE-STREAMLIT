@@ -131,7 +131,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
       <input
         type="text"
         className="chat-input-field"
-        placeholder="Start typing to ask Water Copilot..."
+        placeholder="Start typing to talk with RAG Agent" // <-- updated string
         value={inputText}
         onKeyDown={handleKeyPress}
         onChange={(e) => setInputText((e.target as HTMLInputElement).value)}

@@ -138,9 +138,23 @@ body {
   color: #9ca3af;
 }
 
+.chat-input-field:focus:not(:focus-visible) {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Hide default focus when activated by mouse (keeps accessibility for keyboard) */
 .chat-bar-container:focus-within {
-  box-shadow: 0 14px 48px rgba(6, 182, 212, 0.16), 0 4px 18px rgba(0, 0, 0, 0.08);
+  /* box-shadow: 0 14px 48px rgba(6, 182, 212, 0.16), 0 4px 18px rgba(0, 0, 0, 0.08); */
+  box-shadow: none;
   border: 1px solid rgba(6, 182, 212, 0.22);
+}
+
+/* Show visible ring only for keyboard focus */
+.chat-input-field:focus-visible {
+    outline: 2px solid rgba(15,118,110,0.12);
+    box-shadow: 0 0 0 4px rgba(15,118,110,0.06);
+    border-radius: 12px;
 }
 
 /* Recording indicator */
