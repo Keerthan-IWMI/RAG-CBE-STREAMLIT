@@ -1,7 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Streamlit, withStreamlitConnection } from "streamlit-component-lib";
-import { useReactMediaRecorder } from "react-media-recorder";
-// Using outlined icons for cleaner look
+import React, { useState, useEffect, useRef } from "react";
+import { Streamlit, withStreamlitConnection, ComponentProps } from "streamlit-component-lib";
 import SendIcon from "@mui/icons-material/ArrowUpward";
 import MicIcon from "@mui/icons-material/MicNoneOutlined";
 import StopIcon from "@mui/icons-material/Stop";
@@ -10,141 +8,145 @@ import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
 import LocationOnOutlinedIcon from "@mui/icons-material/LocationOnOutlined";
 import './ChatInputWidget.css';
 
-const ChatInputWidget: React.FC = () => {
-  const [inputText, setInputText] = useState<string>("");
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Media recorder hook
-  const {
-    startRecording,
-    stopRecording,
-    mediaBlobUrl,
-    clearBlobUrl,
-    status,
-  } = useReactMediaRecorder({ audio: true });
+interface ChatInputWidgetProps extends ComponentProps {
+  args: {
+    pdf_data?: string;
+    pdf_filename?: string;
+  };
+}
 
-  // Sync local recording state with hook status
-  useEffect(() => {
-    setIsRecording(status === "recording");
-  }, [status]);
+const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
+  const [inputText, setInputText] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
-  // Debug build marker to help confirm correct bundle is loaded in the browser
-  useEffect(() => {
-    console.log('[ChatInputWidget] Build v2 loaded');
-  }, []);
+  // Pdf data from args (used for download)
+  const pdfData = args.pdf_data ?? null;
+  const pdfFilename = args.pdf_filename ?? "conversation.pdf";
 
-  // Set frame height on mount
   useEffect(() => {
     Streamlit.setFrameHeight();
   }, []);
 
-  // Send data to Streamlit
-  const sendDataToStreamlit = useCallback((data: { text?: string; audio?: Uint8Array; audioFile?: Uint8Array }) => {
-    Streamlit.setComponentValue(data);
-  }, []);
+  const handleSendText = () => {
+    if (!inputText.trim()) return;
+    Streamlit.setComponentValue({ text: inputText.trim() });
+    setInputText("");
+  };
 
-  // Send audio blob as bytes
-  const sendAudioBlobAsBytes = useCallback(async (blobUrl: string) => {
-    if (!blobUrl) return;
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendText();
+    }
+  };
+
+  const handleMicClick = async () => {
+    if (isRecording && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      mediaRecorderRef.current = null;
+      return;
+    }
+
     try {
-      const response = await fetch(blobUrl);
-      const blob = await response.blob();
-      const arrayBuffer = await blob.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      sendDataToStreamlit({ audioFile: uint8Array });
-      clearBlobUrl();
-    } catch (error) {
-      console.error("Error processing audio:", error);
-    }
-  }, [sendDataToStreamlit, clearBlobUrl]);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
 
-  // Watch for new audio blob
-  useEffect(() => {
-    if (mediaBlobUrl) {
-      sendAudioBlobAsBytes(mediaBlobUrl);
-    }
-  }, [mediaBlobUrl, sendAudioBlobAsBytes]);
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+      };
 
-  // Handle input change
-  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setInputText(event.target.value);
-  };
+      recorder.onstop = () => {
+        if (audioChunksRef.current.length === 0) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = reader.result as string; // data:audio/wav;base64,...
+          // Single send: set component value once on stop (user-initiated)
+          Streamlit.setComponentValue({ audioFile: base64String });
+          // local cleanup
+          audioChunksRef.current = [];
+        };
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach((t) => t.stop());
+      };
 
-  // Handle Enter key
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && inputText.trim().length > 0) {
-      event.preventDefault();
-      handleSend();
-    }
-  };
-
-  // Handle send button click
-  const handleSend = () => {
-    if (inputText.trim().length > 0) {
-      sendDataToStreamlit({ text: inputText });
-      setInputText("");
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Mic access denied:", err);
     }
   };
 
-  // Handle mic button click
-  const handleMicClick = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
+  const handleDownload = () => {
+    if (!pdfData) return;
+    try {
+      const bytes = atob(pdfData);
+      const arr = new Uint8Array(new ArrayBuffer(bytes.length));
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      const blob = new Blob([arr], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = pdfFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Download failed", e);
     }
+  };
+
+  const handleAttach = () => {
+    Streamlit.setComponentValue({ attach: true });
+  };
+
+  const handleLocation = () => {
+    Streamlit.setComponentValue({ location: true });
   };
 
   return (
     <div className="chat-bar-container">
-      {/* Left action buttons */}
       <div className="left-actions">
-        <button className="action-btn" title="Download">
+        <button className="action-btn download-btn" title="Download Conversation" onClick={handleDownload} disabled={!pdfData}>
           <DownloadOutlinedIcon />
         </button>
-        <button className="action-btn" title="Attach file">
+        <button className="action-btn" title="Attach file" onClick={handleAttach}>
           <AttachFileOutlinedIcon />
         </button>
-        <button className="action-btn" title="Location">
+        <button className="action-btn" title="Add location" onClick={handleLocation}>
           <LocationOnOutlinedIcon />
         </button>
       </div>
 
-      {/* Center input */}
       <input
-        ref={inputRef}
         type="text"
         className="chat-input-field"
         placeholder="Start typing to ask Water Copilot..."
         value={inputText}
-        onChange={handleInputChange}
-        onKeyDown={handleKeyDown}
+        onKeyDown={handleKeyPress}
+        onChange={(e) => setInputText((e.target as HTMLInputElement).value)}
       />
 
-      {/* Recording indicator */}
-      {isRecording && (
-        <div className="recording-indicator">
-          <span className="recording-dot"></span>
-          <span className="recording-text">Recording...</span>
-        </div>
-      )}
-
-      {/* Right action buttons */}
       <div className="right-actions">
-        <button 
-          className={`action-btn mic-btn ${isRecording ? 'recording' : ''}`} 
-          onClick={handleMicClick}
-          title={isRecording ? "Stop recording" : "Start recording"}
-        >
+        {isRecording && (
+          <div className="recording-indicator"><div className="recording-dot"></div><span className="recording-text">Recording...</span></div>
+        )}
+
+        <button className={`action-btn mic-btn ${isRecording ? "recording" : ""}`} title={isRecording ? "Stop recording" : "Start recording"} onClick={handleMicClick}>
           {isRecording ? <StopIcon /> : <MicIcon />}
         </button>
-        <button 
-          className={`send-btn ${inputText.trim().length > 0 ? 'active' : ''}`}
-          onClick={handleSend}
-          disabled={inputText.trim().length === 0}
-          title="Send message"
-        >
+
+        <button className={`send-btn ${inputText.trim() ? "active" : ""}`} onClick={handleSendText} disabled={!inputText.trim()}>
           <SendIcon />
         </button>
       </div>

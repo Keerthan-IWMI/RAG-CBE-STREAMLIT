@@ -9,6 +9,7 @@ import requests #for Whisper
 import base64
 from streamlit_chat_widget import chat_input_widget
 from streamlit_float import float_init
+import base64
 
 
 # Import RAG pipeline
@@ -644,6 +645,8 @@ def load_custom_css():
         box-shadow: 0 0 0 2px #0F766E, 0 0 18px rgba(15,118,110,0.5);
         transition: box-shadow 0.3s ease;
     }}
+
+    button[key="auto_download_btn"] {{ display: none !important; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -1137,12 +1140,23 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
 
+    # Generate PDF data for the widget to use
+    pdf_data_b64 = None
+    if st.session_state.messages:
+        pdf_content = export_conversation_pdf()
+        if pdf_content:
+            pdf_data_b64 = base64.b64encode(pdf_content).decode()
+
     # ===== Custom Chat Input Widget (Fixed at Bottom) =====
     footer_container = st.container()
     with footer_container:
-        # Use message count as key to reset widget after each send
+        # Use message count as key to reset widget after each send (prevents duplicate re-sends on rerun)
         widget_key = f"chat_widget_{len(st.session_state.messages)}"
-        user_input = chat_input_widget(key=widget_key)
+        user_input = chat_input_widget(
+            key=widget_key,
+            pdf_data=pdf_data_b64,
+            pdf_filename=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        )
     
     # Float the container - transparent background, pointer-events: none allows scrolling through it
     footer_container.float("bottom: 0px; background-color: transparent; padding: 10px 0; pointer-events: none;")
@@ -1160,6 +1174,7 @@ def main():
     prompt = None
     
     if user_input:
+
         if "text" in user_input and user_input["text"]:
             # Text input from typing
             prompt = user_input["text"]
@@ -1191,12 +1206,29 @@ def main():
             except Exception as e:
                 st.error(f"❌ Failed to parse audio payload: {e}")
                 audio_bytes = None
+
             if audio_bytes:
                 with st.spinner("🎙️ Transcribing audio..."):
                     transcribed_text = transcribe_audio(audio_bytes)
-                    if transcribed_text:
-                        prompt = transcribed_text
-                        st.info(f"📝 Transcribed: {prompt}")
+                # find the last "Transcribing audio..." placeholder (should be the one we added)
+                status_idx = None
+                for i in range(len(st.session_state.messages) - 1, -1, -1):
+                    if st.session_state.messages[i].get("content") == "🎙️ Transcribing audio...":
+                        status_idx = i
+                        break
+
+                if transcribed_text:
+                    # update the placeholder message to 'Transcribed: ...'
+                    if status_idx is not None:
+                        st.session_state.messages[status_idx]["content"] = f"🎙️ Transcribed: {transcribed_text}"
+                    # set the prompt so the regular pipeline handles the next steps (append user + fetch assistant)
+                    prompt = transcribed_text
+                else:
+                    # transcription failed - update placeholder to an error message
+                    if status_idx is not None:
+                        st.session_state.messages[status_idx]["content"] = "⚠️ Transcription failed."
+                # persist changes
+                save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
 
     if prompt:
         # Add user message to session state
