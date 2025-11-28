@@ -1,5 +1,6 @@
 ﻿# Core app
 streamlit
+streamlit-float
 PyMuPDF
 python-dotenv
 requests
