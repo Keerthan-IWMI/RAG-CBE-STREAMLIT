@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { Streamlit, withStreamlitConnection, ComponentProps } from "streamlit-component-lib";
-import SendIcon from "@mui/icons-material/ArrowUpward";
-import MicIcon from "@mui/icons-material/MicNoneOutlined";
-import StopIcon from "@mui/icons-material/Stop";
-import DownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
-import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
-import LocationOnOutlinedIcon from "@mui/icons-material/LocationOnOutlined";
 import './ChatInputWidget.css';
+import ActionButtons from "./components/ActionButtons";
+import FilterSidebar from "./components/FilterSidebar";
+import InputField from "./components/InputField";
+import MicButton from "./components/MicButton";
+import SendButton from "./components/SendButton";
+import RecordingIndicator from "./components/RecordingIndicator";
 
 
 interface ChatInputWidgetProps extends ComponentProps {
@@ -19,8 +19,9 @@ interface ChatInputWidgetProps extends ComponentProps {
 const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const [inputText, setInputText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const [showFilter, setShowFilter] = useState(false);
+  const [filters, setFilters] = useState<{ year?: string; author?: string; keywords?: string }>({ year: "", author: "", keywords: "" });
+  // no explicit anchor required for inline popover
 
   // Pdf data from args (used for download)
   const pdfData = args.pdf_data ?? null;
@@ -29,6 +30,12 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   useEffect(() => {
     Streamlit.setFrameHeight();
   }, []);
+
+  useEffect(() => {
+    // When filter popover is closed, restore the default frame height.
+    // We avoid resetting the frame height while the popover is open to prevent clipping.
+    if (!showFilter) Streamlit.setFrameHeight();
+  }, [showFilter]);
 
   const handleSendText = () => {
     if (!inputText.trim()) return;
@@ -43,47 +50,8 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
     }
   };
 
-  const handleMicClick = async () => {
-    if (isRecording && mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      mediaRecorderRef.current = null;
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-
-      recorder.ondataavailable = (ev) => {
-        if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
-      };
-
-      recorder.onstop = () => {
-        if (audioChunksRef.current.length === 0) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64String = reader.result as string; // data:audio/wav;base64,...
-          // Single send: set component value once on stop (user-initiated)
-          Streamlit.setComponentValue({ audioFile: base64String });
-          // local cleanup
-          audioChunksRef.current = [];
-        };
-        reader.readAsDataURL(audioBlob);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-    } catch (err) {
-      console.error("Mic access denied:", err);
-    }
+  const handleSendAudio = (base64: string) => {
+    Streamlit.setComponentValue({ audioFile: base64 });
   };
 
   const handleDownload = () => {
@@ -110,45 +78,47 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
     Streamlit.setComponentValue({ attach: true });
   };
 
-  const handleLocation = () => {
-    Streamlit.setComponentValue({ location: true });
+  const handleApplyFilter = () => {
+    Streamlit.setComponentValue({ filter: filters });
+    setShowFilter(false);
   };
+
+  const handleCancelFilter = () => {
+    Streamlit.setComponentValue({ filter: null });
+    setShowFilter(false);
+  };
+
+  const onToggleFilter = () => {
+    setShowFilter((s) => !s);
+  };
+
+  const onRecordingStateChange = (v: boolean) => setIsRecording(v);
 
   return (
     <div className="chat-bar-container">
-      <div className="left-actions">
-        <button className="action-btn download-btn" title="Download Conversation" onClick={handleDownload} disabled={!pdfData}>
-          <DownloadOutlinedIcon />
-        </button>
-        <button className="action-btn" title="Attach file" onClick={handleAttach}>
-          <AttachFileOutlinedIcon />
-        </button>
-        <button className="action-btn" title="Add location" onClick={handleLocation}>
-          <LocationOnOutlinedIcon />
-        </button>
-      </div>
-
-      <input
-        type="text"
-        className="chat-input-field"
-        placeholder="Start typing to talk with RAG Agent" // <-- updated string
-        value={inputText}
-        onKeyDown={handleKeyPress}
-        onChange={(e) => setInputText((e.target as HTMLInputElement).value)}
+      <ActionButtons
+        onDownload={handleDownload}
+        onAttach={handleAttach}
+        onToggleFilter={onToggleFilter}
+        showFilter={showFilter}
+        pdfDataAvailable={!!pdfData}
+        filterPopover={
+          <FilterSidebar
+            visible={showFilter}
+            filters={filters}
+            onChange={(k, v) => setFilters((prev) => ({ ...prev, [k]: v }))}
+            onApply={handleApplyFilter}
+            onCancel={handleCancelFilter}
+          />
+        }
       />
 
+      <InputField value={inputText} onChange={setInputText} onKeyPress={handleKeyPress} placeholder="Start typing to talk with RAG Agent" />
+
       <div className="right-actions">
-        {isRecording && (
-          <div className="recording-indicator"><div className="recording-dot"></div><span className="recording-text">Recording...</span></div>
-        )}
-
-        <button className={`action-btn mic-btn ${isRecording ? "recording" : ""}`} title={isRecording ? "Stop recording" : "Start recording"} onClick={handleMicClick}>
-          {isRecording ? <StopIcon /> : <MicIcon />}
-        </button>
-
-        <button className={`send-btn ${inputText.trim() ? "active" : ""}`} onClick={handleSendText} disabled={!inputText.trim()}>
-          <SendIcon />
-        </button>
+        {isRecording && <RecordingIndicator />}
+        <MicButton onSendAudio={handleSendAudio} onRecordingChange={onRecordingStateChange} />
+        <SendButton active={!!inputText.trim()} onClick={handleSendText} />
       </div>
     </div>
   );
