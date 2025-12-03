@@ -3,6 +3,7 @@ import { Streamlit, withStreamlitConnection, ComponentProps } from "streamlit-co
 import './ChatInputWidget.css';
 import ActionButtons from "./components/ActionButtons";
 import FilterSidebar from "./components/FilterSidebar";
+import FileUploadModal from "./components/FileUploadModal";
 import InputField from "./components/InputField";
 import MicButton from "./components/MicButton";
 import SendButton from "./components/SendButton";
@@ -20,6 +21,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const [inputText, setInputText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [showFileUpload, setShowFileUpload] = useState(false);
   const [filters, setFilters] = useState<{ year?: string; author?: string; keywords?: string }>({ year: "", author: "", keywords: "" });
   // no explicit anchor required for inline popover
 
@@ -75,7 +77,11 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   };
 
   const handleAttach = () => {
-    Streamlit.setComponentValue({ attach: true });
+    setShowFileUpload(true);
+  };
+
+  const handleFileUploadClose = () => {
+    setShowFileUpload(false);
   };
 
   const handleApplyFilter = () => {
@@ -120,6 +126,8 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
         <MicButton onSendAudio={handleSendAudio} onRecordingChange={onRecordingStateChange} />
         <SendButton active={!!inputText.trim()} onClick={handleSendText} />
       </div>
+
+      <FileUploadModal visible={showFileUpload} onClose={handleFileUploadClose} />
     </div>
   );
 };
