@@ -4,6 +4,7 @@ import './ChatInputWidget.css';
 import ActionButtons from "./components/ActionButtons";
 import FilterSidebar from "./components/FilterSidebar";
 import FileUploadModal from "./components/FileUploadModal";
+import SupportModal from "./components/SupportModal";
 import InputField from "./components/InputField";
 import MicButton from "./components/MicButton";
 import SendButton from "./components/SendButton";
@@ -32,6 +33,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
+  const [showSupport, setShowSupport] = useState(false);
   const [filters, setFilters] = useState<{ yearStart?: string; yearEnd?: string; author?: string; keywords?: string }>({ yearStart: "", yearEnd: "", author: "", keywords: "" });
   // no explicit anchor required for inline popover
 
@@ -143,6 +145,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
         onDownload={handleDownload}
         onAttach={handleAttach}
         onToggleFilter={onToggleFilter}
+        onSupport={() => setShowSupport(true)}
         showFilter={showFilter}
         pdfDataAvailable={!!pdfData}
         darkMode={darkMode}
@@ -167,6 +170,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
       </div>
 
       <FileUploadModal visible={showFileUpload} onClose={handleFileUploadClose} darkMode={darkMode} />
+      <SupportModal visible={showSupport} onClose={() => setShowSupport(false)} darkMode={darkMode} />
     </div>
     </div>
   );

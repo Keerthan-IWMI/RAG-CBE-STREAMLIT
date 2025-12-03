@@ -2,18 +2,20 @@ import React, { useRef, useState, useLayoutEffect } from "react";
 import DownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
 import FilterListOutlinedIcon from "@mui/icons-material/FilterListOutlined";
+import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 
 interface ActionButtonsProps {
   onDownload: () => void;
   onAttach: () => void;
   onToggleFilter: () => void;
+  onSupport: () => void;
   showFilter: boolean;
   pdfDataAvailable: boolean;
   filterPopover?: React.ReactNode;
   darkMode?: boolean;
 }
 
-const ActionButtons: React.FC<ActionButtonsProps> = ({ onDownload, onAttach, onToggleFilter, showFilter, pdfDataAvailable, filterPopover, darkMode = false }) => {
+const ActionButtons: React.FC<ActionButtonsProps> = ({ onDownload, onAttach, onToggleFilter, onSupport, showFilter, pdfDataAvailable, filterPopover, darkMode = false }) => {
   const filterBtnRef = useRef<HTMLButtonElement | null>(null);
   const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
 
@@ -56,6 +58,9 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({ onDownload, onAttach, onT
       </button>
       <button ref={filterBtnRef} className={`action-btn filter-btn ${showFilter ? "open" : ""}`} title="Filter results" onClick={() => onToggleFilter()} style={buttonStyle}>
         <FilterListOutlinedIcon />
+      </button>
+      <button className="action-btn" title="Contact Support" onClick={onSupport} style={buttonStyle}>
+        <SupportAgentOutlinedIcon />
       </button>
       {filterPopover && React.isValidElement(filterPopover) ? React.cloneElement(filterPopover as any, { anchorOffset: anchor }) : filterPopover}
     </div>
