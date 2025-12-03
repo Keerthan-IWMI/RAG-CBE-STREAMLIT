@@ -10,9 +10,10 @@ interface ActionButtonsProps {
   showFilter: boolean;
   pdfDataAvailable: boolean;
   filterPopover?: React.ReactNode;
+  darkMode?: boolean;
 }
 
-const ActionButtons: React.FC<ActionButtonsProps> = ({ onDownload, onAttach, onToggleFilter, showFilter, pdfDataAvailable, filterPopover }) => {
+const ActionButtons: React.FC<ActionButtonsProps> = ({ onDownload, onAttach, onToggleFilter, showFilter, pdfDataAvailable, filterPopover, darkMode = false }) => {
   const filterBtnRef = useRef<HTMLButtonElement | null>(null);
   const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
 
@@ -39,15 +40,21 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({ onDownload, onAttach, onT
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
+
+  const buttonStyle: React.CSSProperties = darkMode ? {
+    background: '#334155',
+    color: '#e2e8f0',
+  } : {};
+
   return (
     <div className="left-actions">
-      <button className="action-btn download-btn" title="Download Conversation" onClick={onDownload} disabled={!pdfDataAvailable}>
+      <button className="action-btn download-btn" title="Download Conversation" onClick={onDownload} disabled={!pdfDataAvailable} style={buttonStyle}>
         <DownloadOutlinedIcon />
       </button>
-      <button className="action-btn" title="Attach file" onClick={onAttach}>
+      <button className="action-btn" title="Attach file" onClick={onAttach} style={buttonStyle}>
         <AttachFileOutlinedIcon />
       </button>
-      <button ref={filterBtnRef} className={`action-btn filter-btn ${showFilter ? "open" : ""}`} title="Filter results" onClick={() => onToggleFilter()}>
+      <button ref={filterBtnRef} className={`action-btn filter-btn ${showFilter ? "open" : ""}`} title="Filter results" onClick={() => onToggleFilter()} style={buttonStyle}>
         <FilterListOutlinedIcon />
       </button>
       {filterPopover && React.isValidElement(filterPopover) ? React.cloneElement(filterPopover as any, { anchorOffset: anchor }) : filterPopover}

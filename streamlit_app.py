@@ -131,22 +131,47 @@ def delete_chat_history(email: str) -> bool:
 
 # ------------------- CUSTOM CSS -------------------
 
-def load_custom_css():
+def load_custom_css(dark_mode=False):
+    # Dark mode color overrides - using Tailwind Slate palette for cohesion
+    if dark_mode:
+        bg_main = "#0f172a"      # slate-900
+        bg_secondary = "#1e293b"  # slate-800
+        bg_card = "#1e293b"       # slate-800
+        bg_hover = "#334155"      # slate-700
+        text_primary = "#f1f5f9"  # slate-100
+        text_secondary = "#94a3b8" # slate-400
+        text_muted = "#64748b"    # slate-500
+        border_color = "#334155"  # slate-700
+        accent = "#22d3ee"        # cyan-400
+        accent_secondary = "#2dd4bf" # teal-400
+    else:
+        bg_main = BACKGROUND_LIGHT
+        bg_secondary = "#ECFDF5"
+        bg_card = "white"
+        bg_hover = "#F1F5F9"      # slate-100
+        text_primary = TEXT_PRIMARY
+        text_secondary = TEXT_SECONDARY
+        text_muted = "#64748b"    # slate-500
+        border_color = "#E2E8F0"
+        accent = PRIMARY_COLOR
+        accent_secondary = ACCENT_COLOR
+    
     st.markdown(f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
     * {{
         font-family: 'Inter', sans-serif;
+        transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
     }}
     
     .main {{
-        background: linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #ECFDF5 50%, #F0F9FF 100%);
+        background: {"#0f172a" if dark_mode else f"linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #ECFDF5 50%, #F0F9FF 100%)"};
         padding: 0;
     }}
     
     .stApp {{
-        background: linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #ECFDF5 50%, #F0F9FF 100%);
+        background: {"#0f172a" if dark_mode else f"linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #ECFDF5 50%, #F0F9FF 100%)"};
     }}
     
     /* Header Styling */
@@ -212,6 +237,9 @@ def load_custom_css():
         margin: 1rem 0;
         box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         transition: all 0.2s ease;
+        position: relative; /* allow z-index to take effect */
+        overflow: visible !important; /* ensure shadow isn't clipped by parent */
+        z-index: 1;
     }}
     
     .stChatMessage:hover {{
@@ -224,36 +252,52 @@ def load_custom_css():
     
     /* User Messages */
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {{
-        background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
-        border-left: 4px solid {SECONDARY_COLOR};
+        background: {"linear-gradient(135deg, #334155 0%, #475569 100%)" if dark_mode else "linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%)"};
+        border: {"1px solid #475569" if dark_mode else "none"};
+        border-left: 4px solid {"#38bdf8" if dark_mode else SECONDARY_COLOR} !important;
     }}
     
-    /* Assistant Messages */
+    /* Assistant Messages - more visible in dark mode */
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {{
-        background: linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #ECFDF5 100%);
-        border-left: 4px solid {ACCENT_COLOR};
+        background: {"linear-gradient(135deg, #475569 0%, #64748b 100%)" if dark_mode else f"linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #ECFDF5 100%)"};
+        border: {"2px solid #94a3b8" if dark_mode else "1px solid #e2e8f0"};
+        border-left: 4px solid {"#14b8a6" if dark_mode else ACCENT_COLOR} !important;
+        box-shadow: {"0 4px 16px rgba(0,0,0,0.4)" if dark_mode else "0 6px 20px rgba(0,0,0,0.08)"};
     }}
     
     /* Reference Cards */
     .reference-card {{
-        background: white;
-        border: 1.5px solid #E2E8F0;
+        background: {"#0f172a" if dark_mode else "white"};
+        border: {"1.5px solid #475569" if dark_mode else "1.5px solid #e2e8f0"};
         border-radius: 12px;
         padding: 1rem;
         margin: 0.75rem 0;
         transition: all 0.2s ease;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        box-shadow: {"0 2px 8px rgba(0,0,0,0.3)" if dark_mode else "0 1px 3px rgba(0,0,0,0.05)"};
     }}
     
+    .reference-card * {{
+        color: {text_primary} !important;
+    }}
+    
+    .reference-card p, .reference-card span, .reference-card div {{
+        color: {text_secondary} !important;
+    }}
+    
+    .reference-card h1, .reference-card h2, .reference-card h3, 
+    .reference-card h4, .reference-card h5, .reference-card strong {{
+        color: {text_primary} !important;
+    }}
+
     .reference-card:hover {{
-        border-color: {PRIMARY_COLOR};
-        box-shadow: 0 4px 12px rgba(15, 118, 110, 0.1);
+        border-color: {accent};
+        box-shadow: {"0 4px 16px rgba(20, 184, 166, 0.3)" if dark_mode else "0 4px 12px rgba(15, 118, 110, 0.1)"};
         transform: translateY(-2px);
     }}
     
     .reference-header {{
         font-weight: 600;
-        color: {TEXT_PRIMARY};
+        color: {text_primary};
         margin-bottom: 0.5rem;
         font-size: 0.95rem;
         display: flex;
@@ -262,7 +306,7 @@ def load_custom_css():
     }}
     
     .reference-content {{
-        color: {TEXT_SECONDARY};
+        color: {text_secondary};
         font-size: 0.88rem;
         line-height: 1.6;
         margin-top: 0.5rem;
@@ -280,27 +324,27 @@ def load_custom_css():
     }}
     
     .badge-table {{ 
-        background: #FEF3C7; 
-        color: #D97706;
-        border: 1px solid #FCD34D;
+        background: {"#422006" if dark_mode else "#FEF3C7"}; 
+        color: {"#fbbf24" if dark_mode else "#D97706"} !important;
+        border: 1px solid {"#854d0e" if dark_mode else "#FCD34D"};
     }}
     
     .badge-heading {{ 
-        background: #D1FAE5; 
-        color: #059669;
-        border: 1px solid #6EE7B7;
+        background: {"#14532d" if dark_mode else "#D1FAE5"}; 
+        color: {"#4ade80" if dark_mode else "#059669"} !important;
+        border: 1px solid {"#166534" if dark_mode else "#6EE7B7"};
     }}
     
     .badge-text {{
-        background: #E0E7FF;
-        color: #4F46E5;
-        border: 1px solid #C7D2FE;
+        background: {"#1e1b4b" if dark_mode else "#E0E7FF"};
+        color: {"#a5b4fc" if dark_mode else "#4F46E5"} !important;
+        border: 1px solid {"#3730a3" if dark_mode else "#C7D2FE"};
     }}
     
     /* Sidebar Styling */
     [data-testid="stSidebar"] {{
-        background: linear-gradient(180deg, #F8FAFC 0%, white 100%);
-        border-right: 2px solid #E2E8F0;
+        background: {"linear-gradient(180deg, #1e293b 0%, #0f172a 100%)" if dark_mode else "linear-gradient(180deg, #F8FAFC 0%, white 100%)"};
+        border-right: 2px solid {border_color};
     }}
     
     [data-testid="stSidebar"] > div:first-child {{
@@ -310,7 +354,7 @@ def load_custom_css():
     .sidebar-title {{
         font-size: 1.3rem;
         font-weight: 700;
-        color: {PRIMARY_COLOR};
+        color: {accent};
         margin-bottom: 0rem;
         display: flex;
         align-items: center;
@@ -318,37 +362,88 @@ def load_custom_css():
     }}
     
     .sidebar-section {{
-        background: white;
+        background: {bg_card};
         padding: 0rem;
         border-radius: 10px;
         margin-bottom: 0rem;
-        border: 1px solid #E2E8F0;
+        border: 1px solid {border_color};
     }}
     
-    /* Buttons */
-    .stButton > button {{
+    /* Buttons - comprehensive styling */
+    .stButton > button,
+    [data-testid="stBaseButton-secondary"],
+    [data-testid="stBaseButton-primary"],
+    [data-testid="baseButton-secondary"],
+    [data-testid="baseButton-primary"],
+    button[kind="secondary"],
+    button[kind="primary"] {{
         width: 100%;
-        background: linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%);
-        color: white;
-        border: none;
-        padding: 0rem;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 12px rgba(15, 118, 110, 0.2);
+        background: {"linear-gradient(135deg, #0d9488 0%, #14b8a6 100%)" if dark_mode else f"linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%)"} !important;
+        color: white !important;
+        border: {"1px solid #14b8a6" if dark_mode else "none"} !important;
+        padding: 0.5rem 0.75rem !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        font-size: 0.8rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: {"0 4px 12px rgba(20, 184, 166, 0.3)" if dark_mode else "0 4px 12px rgba(15, 118, 110, 0.2)"} !important;
+        min-height: 38px !important;
+        height: 38px !important;
+        line-height: 1 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }}
+    
+    /* All button text - covers all possible structures */
+    .stButton > button *,
+    [data-testid="stBaseButton-secondary"] *,
+    [data-testid="stBaseButton-primary"] *,
+    [data-testid="baseButton-secondary"] *,
+    [data-testid="baseButton-primary"] * {{
+        color: white !important;
+    }}
+    
+    /* Sidebar buttons - ensure visibility in dark mode */
+    section[data-testid="stSidebar"] .stButton > button,
+    section[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+    section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"],
+    section[data-testid="stSidebar"] button[kind="secondary"],
+    section[data-testid="stSidebar"] button[kind="primary"] {{
+        background: {"linear-gradient(135deg, #0d9488 0%, #14b8a6 100%)" if dark_mode else f"linear-gradient(135deg, {PRIMARY_COLOR} 0%, {SECONDARY_COLOR} 100%)"} !important;
+        color: white !important;
+    }}
+    
+    section[data-testid="stSidebar"] .stButton > button *,
+    section[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] *,
+    section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] * {{
+        color: white !important;
+    }}
+    
+    /* Download button styling */
+    section[data-testid="stSidebar"] .stDownloadButton > button,
+    .stDownloadButton > button,
+    [data-testid="stBaseButton-secondary"].stDownloadButton {{
+        background: {"#1e293b" if dark_mode else "white"} !important;
+        color: {accent} !important;
+        border: 2px solid {accent} !important;
+    }}
+    
+    section[data-testid="stSidebar"] .stDownloadButton > button *,
+    .stDownloadButton > button * {{
+        color: {accent} !important;
     }}
     
     .stButton > button:hover {{
         transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(15, 118, 110, 0.3);
+        box-shadow: {"0 6px 20px rgba(20, 184, 166, 0.4)" if dark_mode else "0 6px 20px rgba(15, 118, 110, 0.3)"};
     }}
     
     .stDownloadButton > button {{
         width: 100%;
-        background: white;
-        color: {PRIMARY_COLOR};
-        border: 2px solid {PRIMARY_COLOR};
+        background: {bg_card};
+        color: {accent} !important;
+        border: 2px solid {accent};
         padding: 0.6rem 1rem;
         border-radius: 10px;
         font-weight: 600;
@@ -356,38 +451,117 @@ def load_custom_css():
         transition: all 0.3s ease;
     }}
     
+    .stDownloadButton > button p {{
+        color: {accent} !important;
+    }}
+    
     .stDownloadButton > button:hover {{
-        background: {PRIMARY_COLOR};
-        color: white;
+        background: {accent};
+        color: {"#0f172a" if dark_mode else "white"} !important;
+    }}
+    
+    .stDownloadButton > button:hover *,
+    .stDownloadButton > button:hover p {{
+        color: {"#0f172a" if dark_mode else "white"} !important;
+    }}
+    
+    /* Tooltip styling for dark mode */
+    [data-baseweb="tooltip"],
+    [data-baseweb="popover"],
+    .stTooltipContent,
+    .stTooltipHoverTarget + div,
+    div[role="tooltip"],
+    [data-testid="stTooltipContent"],
+    [data-testid="stMarkdownContainer"] + div[role="tooltip"] {{
+        background: {"#1e293b" if dark_mode else "#334155"} !important;
+        color: {"#f1f5f9" if dark_mode else "white"} !important;
+        border: {"1px solid #475569" if dark_mode else "none"} !important;
+        border-radius: 8px !important;
+        padding: 8px 12px !important;
+    }}
+    
+    [data-baseweb="tooltip"] *,
+    [data-baseweb="popover"] *,
+    div[role="tooltip"] *,
+    [data-testid="stTooltipContent"] * {{
+        color: {"#f1f5f9" if dark_mode else "white"} !important;
+        background: transparent !important;
+    }}
+    
+    /* Streamlit popover body - the actual content */
+    [data-baseweb="popover"] > div {{
+        background: {"#1e293b" if dark_mode else "#334155"} !important;
     }}
     
     /* Input Styling */
     .stChatInput {{
-        border-radius: 12px;
+        border-radius: 24px;
     }}
     
     .stChatInput > div {{
-        border-radius: 12px;
-        border: 2px solid #E2E8F0;
+        border-radius: 24px;
+        border: 2px solid {"#334155" if dark_mode else "#E2E8F0"};
+        background: {bg_card};
         transition: all 0.2s ease;
     }}
     
     .stChatInput > div:focus-within {{
-        border-color: {PRIMARY_COLOR};
-        box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+        border-color: {accent};
+        box-shadow: 0 0 0 3px {"rgba(20, 184, 166, 0.2)" if dark_mode else "rgba(15, 118, 110, 0.1)"};
+    }}
+    
+    .stChatInput textarea,
+    .stChatInput input {{
+        border-radius: 24px !important;
     }}
     
     /* Expander Styling */
-    .streamlit-expanderHeader {{
-        background: linear-gradient(135deg, #F8FAFC 0%, white 100%);
+    .streamlit-expanderHeader,
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] > div:first-child {{
+        background: {"linear-gradient(135deg, #1e293b 0%, #334155 100%)" if dark_mode else "linear-gradient(135deg, #F8FAFC 0%, white 100%)"} !important;
         border-radius: 10px;
         font-weight: 600;
-        color: {PRIMARY_COLOR};
-        border: 1px solid #E2E8F0;
+        color: {accent} !important;
+        border: 1px solid {border_color} !important;
     }}
     
-    .streamlit-expanderHeader:hover {{
-        background: linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #F8FAFC 100%);
+    /* Fix expander summary layout - icon flush with border */
+    [data-testid="stExpander"] summary {{
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+    }}
+    
+    [data-testid="stExpander"] summary svg {{
+        flex-shrink: 0 !important;
+        margin: 0 !important;
+    }}
+    
+    [data-testid="stExpander"] summary span,
+    [data-testid="stExpander"] summary p,
+    .streamlit-expanderHeader span,
+    .streamlit-expanderHeader p {{
+        color: {accent} !important;
+    }}
+    
+    [data-testid="stExpander"] svg {{
+        color: {accent} !important;
+        fill: {accent} !important;
+    }}
+
+    .streamlit-expanderHeader:hover,
+    [data-testid="stExpander"] summary:hover {{
+        background: {"linear-gradient(135deg, #334155 0%, #475569 100%)" if dark_mode else f"linear-gradient(135deg, {BACKGROUND_LIGHT} 0%, #F8FAFC 100%)"} !important;
+    }}
+    
+    /* Expander content area */
+    [data-testid="stExpander"] > div[data-testid="stExpanderDetails"],
+    [data-testid="stExpander"] > div:last-child {{
+        background: {"#1e293b" if dark_mode else "white"} !important;
+        border: 1px solid {border_color} !important;
+        border-top: none !important;
+        border-radius: 0 0 10px 10px !important;
     }}
     
     /* Spinner */
@@ -418,12 +592,12 @@ def load_custom_css():
     
     /* Session Info */
     .session-info {{
-        background: white;
+        background: {bg_card};
         padding: 0.75rem 1rem;
         border-radius: 10px;
         font-size: 0.85rem;
-        color: {TEXT_SECONDARY};
-        border: 1px solid #E2E8F0;
+        color: {text_muted};
+        border: 1px solid {border_color};
     }}
     
     .stat-box {{
@@ -431,7 +605,7 @@ def load_custom_css():
         justify-content: space-between;
         align-items: center;
         padding: 0.5rem 0;
-        border-bottom: 1px solid #F1F5F9;
+        border-bottom: 1px solid {border_color};
     }}
     
     .stat-box:last-child {{
@@ -439,12 +613,12 @@ def load_custom_css():
     }}
     
     .stat-label {{
-        color: {TEXT_SECONDARY};
+        color: {text_muted};
         font-weight: 500;
     }}
     
     .stat-value {{
-        color: {PRIMARY_COLOR};
+        color: {accent};
         font-weight: 700;
     }}
     
@@ -469,19 +643,19 @@ def load_custom_css():
     [data-testid="collapsedControl"] {{
         display: flex !important;
         visibility: visible !important;
-        color: {PRIMARY_COLOR} !important;
-        background: white !important;
-        border: 2px solid {PRIMARY_COLOR} !important;
+        color: {accent} !important;
+        background: {bg_card} !important;
+        border: 2px solid {accent} !important;
         border-radius: 8px !important;
         padding: 0.5rem !important;
         margin: 1rem !important;
-        box-shadow: 0 2px 8px rgba(15, 118, 110, 0.2) !important;
+        box-shadow: {"0 2px 8px rgba(20, 184, 166, 0.3)" if dark_mode else "0 2px 8px rgba(15, 118, 110, 0.2)"} !important;
     }}
     
     [data-testid="collapsedControl"]:hover {{
-        background: {BACKGROUND_LIGHT} !important;
+        background: {bg_hover} !important;
         transform: scale(1.05);
-        box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3) !important;
+        box-shadow: {"0 4px 12px rgba(20, 184, 166, 0.4)" if dark_mode else "0 4px 12px rgba(15, 118, 110, 0.3)"} !important;
     }}
     
     header {{
@@ -503,17 +677,17 @@ def load_custom_css():
     }}
     
     ::-webkit-scrollbar-track {{
-        background: #F1F5F9;
+        background: {"#1e293b" if dark_mode else "#F1F5F9"};
         border-radius: 10px;
     }}
     
     ::-webkit-scrollbar-thumb {{
-        background: {PRIMARY_COLOR};
+        background: {accent};
         border-radius: 10px;
     }}
     
     ::-webkit-scrollbar-thumb:hover {{
-        background: {SECONDARY_COLOR};
+        background: {"#0d9488" if dark_mode else SECONDARY_COLOR};
     }}
     
     /* Profile Card Styling - Google-like */
@@ -610,13 +784,34 @@ def load_custom_css():
     }}
     
     button[key="logout_btn"]:hover {{
-        background: white !important;
+        background: {bg_card} !important;
         transform: translateY(-2px) !important;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
     }}
     
     button[key="logout_btn"]:active {{
         transform: translateY(0) !important;
+    }}
+    
+    /* Theme Toggle Button Styling */
+    button[key="theme_toggle_btn"] {{
+        width: 100%;
+        background: {"#21262D" if dark_mode else "rgba(255, 255, 255, 0.95)"} !important;
+        color: {"#58A6FF" if dark_mode else PRIMARY_COLOR} !important;
+        border: 1px solid {"#30363D" if dark_mode else "transparent"} !important;
+        padding: 0.5rem 0.75rem !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 0.8rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: none !important;
+        font-family: 'Inter', sans-serif !important;
+    }}
+    
+    button[key="theme_toggle_btn"]:hover {{
+        background: {"#30363D" if dark_mode else "white"} !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 12px {"rgba(88, 166, 255, 0.15)" if dark_mode else "rgba(0, 0, 0, 0.15)"} !important;
     }}
     
     /* Sidebar Divider */
@@ -642,11 +837,34 @@ def load_custom_css():
     }}
 
     .reference-card.reference-highlight {{
-        box-shadow: 0 0 0 2px #0F766E, 0 0 18px rgba(15,118,110,0.5);
+        box-shadow: 0 0 0 2px {"#58A6FF" if dark_mode else "#0F766E"}, 0 0 18px {"rgba(88,166,255,0.5)" if dark_mode else "rgba(15,118,110,0.5)"};
         transition: box-shadow 0.3s ease;
     }}
 
     button[key="auto_download_btn"] {{ display: none !important; }}
+    
+    /* Dark mode global text */
+    {"" if not dark_mode else f'''
+    .stMarkdown, .stText, p, span, label, .stSelectbox label, .stRadio label {{
+        color: {text_primary} !important;
+    }}
+    
+    [data-testid="stChatMessageContent"] p {{
+        color: {text_primary} !important;
+    }}
+    
+    .stSelectbox > div > div {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
+        border-color: {border_color} !important;
+    }}
+    
+    .stTextInput > div > div > input {{
+        background-color: {bg_card} !important;
+        color: {text_primary} !important;
+        border-color: {border_color} !important;
+    }}
+    '''}
     </style>
     """, unsafe_allow_html=True)
 
@@ -663,6 +881,8 @@ def init_session_state():
         st.session_state.rag_loaded = False
     if "is_switching" not in st.session_state:
         st.session_state.is_switching = False
+    if "dark_mode" not in st.session_state:
+        st.session_state.dark_mode = False
 
 # ------------------- RAG PIPELINE -------------------
 
@@ -829,8 +1049,24 @@ def main():
     if not check_google_auth():
         return
     
-    load_custom_css()
     init_session_state()
+    load_custom_css(st.session_state.dark_mode)
+    
+    # Inject dark mode class on body for React components to detect
+    if st.session_state.dark_mode:
+        st.markdown("""
+        <script>
+            document.body.classList.add('dark-mode');
+            document.documentElement.setAttribute('data-theme', 'dark');
+        </script>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <script>
+            document.body.classList.remove('dark-mode');
+            document.documentElement.removeAttribute('data-theme');
+        </script>
+        """, unsafe_allow_html=True)
     
     # Initialize float for fixed positioning
     float_init()
@@ -893,6 +1129,12 @@ def main():
                 # Import logout function
                 from google_auth import logout
                 logout()
+            
+            # Dark mode toggle
+            st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
+            if st.button("🌙 Dark Mode" if not st.session_state.dark_mode else "☀️ Light Mode", key="theme_toggle_btn", use_container_width=True):
+                st.session_state.dark_mode = not st.session_state.dark_mode
+                st.rerun()
     
     # Professional loading screen
     if not st.session_state.rag_loaded:
@@ -1157,7 +1399,8 @@ def main():
             user_input = chat_input_widget(
                 key=widget_key,
                 pdf_data=pdf_data_b64,
-                pdf_filename=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                pdf_filename=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                dark_mode=st.session_state.dark_mode
             )
         except Exception as e:
             # Log minimal error info and present fallback so the app remains functional

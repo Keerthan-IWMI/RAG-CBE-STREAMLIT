@@ -5,58 +5,77 @@ interface FileUploadModalProps {
   visible: boolean;
   onClose: () => void;
   onFileSelect?: (file: File) => void;
+  darkMode?: boolean;
 }
 
-function injectModalStyles(doc: Document, styleId: string): HTMLStyleElement | null {
-  if (doc.getElementById(styleId)) return null;
-  const style = doc.createElement("style");
-  style.id = styleId;
-  style.textContent = `
-    .file-upload-modal-wrapper { position: fixed; inset: 0; z-index: 999999; pointer-events: none; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; }
-    .file-upload-modal-wrapper.open { pointer-events: auto; }
-    .file-upload-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.5); opacity: 0; transition: opacity 200ms ease; pointer-events: none; backdrop-filter: blur(4px); }
-    .file-upload-overlay.open { opacity: 1; pointer-events: auto; }
-    .file-upload-modal { background: #fff; border-radius: 16px; box-shadow: 0 20px 60px rgba(15,23,42,0.2); width: 440px; max-width: 92vw; transform: scale(0.95) translateY(10px); opacity: 0; transition: all 200ms cubic-bezier(.4,0,.2,1); pointer-events: auto; overflow: hidden; }
-    .file-upload-modal.open { transform: scale(1) translateY(0); opacity: 1; }
-    .file-upload-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
-    .file-upload-header h3 { margin: 0; font-size: 17px; font-weight: 600; color: #0f172a; }
-    .file-upload-close { border: none; background: #f1f5f9; color: #64748b; cursor: pointer; font-size: 16px; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all 150ms; }
-    .file-upload-close:hover { background: #e2e8f0; color: #0f172a; }
-    .file-upload-body { padding: 24px; }
-    .file-drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 40px 24px; text-align: center; transition: all 200ms; cursor: pointer; background: #fafbfc; }
-    .file-drop-zone:hover { border-color: #0891b2; background: #f0fdfa; }
-    .file-drop-zone.dragging { border-color: #0891b2; background: #ecfeff; border-style: solid; }
-    .file-drop-zone.has-file { border-color: #10b981; background: #ecfdf5; border-style: solid; }
-    .drop-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.6; }
-    .drop-title { font-size: 15px; font-weight: 600; color: #334155; margin-bottom: 6px; }
-    .drop-subtitle { font-size: 13px; color: #64748b; }
-    .file-selected { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #f0fdf4; border-radius: 10px; margin-top: 16px; }
-    .file-selected-icon { font-size: 24px; }
-    .file-selected-info { flex: 1; text-align: left; }
-    .file-selected-name { font-size: 14px; font-weight: 500; color: #0f172a; word-break: break-all; }
-    .file-selected-size { font-size: 12px; color: #64748b; }
-    .file-remove { border: none; background: #fef2f2; color: #ef4444; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 150ms; }
-    .file-remove:hover { background: #fee2e2; }
-    .file-upload-footer { padding: 16px 24px; border-top: 1px solid #f1f5f9; display: flex; gap: 12px; justify-content: flex-end; }
-    .file-upload-btn { border: none; padding: 10px 20px; border-radius: 10px; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 150ms; }
-    .file-upload-btn-cancel { background: #f1f5f9; color: #475569; }
-    .file-upload-btn-cancel:hover { background: #e2e8f0; }
-    .file-upload-btn-upload { background: #0891b2; color: #fff; }
-    .file-upload-btn-upload:hover { background: #0e7490; }
-    .file-upload-btn-upload:disabled { background: #cbd5e1; cursor: not-allowed; }
-  `;
-  doc.head.appendChild(style);
-  return style;
-}
+// Color themes
+const lightTheme = {
+  bg: '#fff',
+  border: '#f1f5f9',
+  text: '#0f172a',
+  textMuted: '#64748b',
+  textLabel: '#334155',
+  closeBg: '#f1f5f9',
+  closeHover: '#e2e8f0',
+  dropBorder: '#cbd5e1',
+  dropBg: '#fafbfc',
+  dropHoverBg: '#f0fdfa',
+  dropHoverBorder: '#0891b2',
+  dropDragBg: '#ecfeff',
+  dropSuccessBg: '#ecfdf5',
+  dropSuccessBorder: '#10b981',
+  selectedBg: '#f0fdf4',
+  accent: '#0891b2',
+  accentHover: '#0e7490',
+  btnCancelBg: '#f1f5f9',
+  btnCancelText: '#475569',
+  btnDisabled: '#cbd5e1',
+  overlay: 'rgba(15,23,42,0.5)',
+  shadow: 'rgba(15,23,42,0.2)',
+  removeBg: '#fef2f2',
+  removeHover: '#fee2e2',
+  removeText: '#ef4444',
+};
 
-const FileUploadModal: React.FC<FileUploadModalProps> = ({ visible, onClose, onFileSelect }) => {
+const darkTheme = {
+  bg: '#1e293b',
+  border: '#334155',
+  text: '#f1f5f9',
+  textMuted: '#94a3b8',
+  textLabel: '#e2e8f0',
+  closeBg: '#334155',
+  closeHover: '#475569',
+  dropBorder: '#475569',
+  dropBg: '#0f172a',
+  dropHoverBg: '#0f172a',
+  dropHoverBorder: '#14b8a6',
+  dropDragBg: '#134e4a',
+  dropSuccessBg: '#14532d',
+  dropSuccessBorder: '#22c55e',
+  selectedBg: '#14532d',
+  accent: '#14b8a6',
+  accentHover: '#0d9488',
+  btnCancelBg: '#334155',
+  btnCancelText: '#e2e8f0',
+  btnDisabled: '#475569',
+  overlay: 'rgba(0,0,0,0.6)',
+  shadow: 'rgba(0,0,0,0.4)',
+  removeBg: '#450a0a',
+  removeHover: '#7f1d1d',
+  removeText: '#fca5a5',
+};
+
+const FileUploadModal: React.FC<FileUploadModalProps> = ({ visible, onClose, onFileSelect, darkMode = false }) => {
   const portalRef = useRef<HTMLDivElement | null>(null);
-  const styleRef = useRef<HTMLStyleElement | null>(null);
   const [targetDoc, setTargetDoc] = useState<Document | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [portalReady, setPortalReady] = useState(false);
 
+  const theme = darkMode ? darkTheme : lightTheme;
+
+  // Create portal once on mount - always keep it ready
   useEffect(() => {
     let doc: Document = document;
     try {
@@ -65,19 +84,18 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({ visible, onClose, onF
       }
     } catch (e) {}
     setTargetDoc(doc);
-    portalRef.current = doc.createElement("div");
-    portalRef.current.id = "file-upload-modal-portal";
-    doc.body.appendChild(portalRef.current);
-    styleRef.current = injectModalStyles(doc, "file-upload-modal-styles");
+    
+    const portal = doc.createElement("div");
+    portal.id = "file-upload-modal-portal";
+    doc.body.appendChild(portal);
+    portalRef.current = portal;
+    setPortalReady(true);
+    
     return () => {
-      if (portalRef.current?.parentNode) {
-        portalRef.current.parentNode.removeChild(portalRef.current);
-      }
-      if (styleRef.current?.parentNode) {
-        styleRef.current.parentNode.removeChild(styleRef.current);
+      if (portal.parentNode) {
+        portal.parentNode.removeChild(portal);
       }
       portalRef.current = null;
-      styleRef.current = null;
     };
   }, []);
 
@@ -99,103 +117,260 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({ visible, onClose, onF
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setIsDragging(true);
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setIsDragging(false);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setIsDragging(false);
     const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
+    if (files.length > 0) {
       setSelectedFile(files[0]);
     }
   }, []);
 
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
       setSelectedFile(files[0]);
     }
   }, []);
 
-  const handleZoneClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleRemoveFile = () => {
-    setSelectedFile(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleUpload = () => {
+  const handleUpload = useCallback(() => {
     if (selectedFile && onFileSelect) {
       onFileSelect(selectedFile);
     }
     onClose();
+  }, [selectedFile, onFileSelect, onClose]);
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  // Don't render anything until portal is ready
+  if (!portalReady || !portalRef.current) return null;
+  
+  // When not visible, render empty portal (no overlay, no modal content)
+  if (!visible) {
+    return ReactDOM.createPortal(null, portalRef.current);
+  }
+
+  // Styles
+  const wrapperStyle: React.CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 999999,
+    pointerEvents: visible ? 'auto' : 'none',
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   };
 
-  if (!portalRef.current) return null;
+  const overlayStyle: React.CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    background: theme.overlay,
+    opacity: visible ? 1 : 0,
+    transition: 'opacity 200ms ease',
+    pointerEvents: visible ? 'auto' : 'none',
+    backdropFilter: 'blur(4px)',
+  };
+
+  const modalStyle: React.CSSProperties = {
+    background: theme.bg,
+    borderRadius: '16px',
+    boxShadow: `0 20px 60px ${theme.shadow}`,
+    width: '440px',
+    maxWidth: '92vw',
+    transform: visible ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(10px)',
+    opacity: visible ? 1 : 0,
+    transition: 'all 200ms cubic-bezier(.4,0,.2,1)',
+    pointerEvents: 'auto',
+    overflow: 'hidden',
+  };
+
+  const headerStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '18px 24px',
+    borderBottom: `1px solid ${theme.border}`,
+  };
+
+  const titleStyle: React.CSSProperties = {
+    margin: 0,
+    fontSize: '17px',
+    fontWeight: 600,
+    color: theme.text,
+  };
+
+  const closeButtonStyle: React.CSSProperties = {
+    border: 'none',
+    background: theme.closeBg,
+    color: theme.textMuted,
+    cursor: 'pointer',
+    fontSize: '16px',
+    width: '32px',
+    height: '32px',
+    borderRadius: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 150ms',
+  };
+
+  const bodyStyle: React.CSSProperties = {
+    padding: '24px',
+  };
+
+  const getDropZoneStyle = (): React.CSSProperties => {
+    let borderColor = theme.dropBorder;
+    let background = theme.dropBg;
+    let borderStyle = 'dashed';
+
+    if (selectedFile) {
+      borderColor = theme.dropSuccessBorder;
+      background = theme.dropSuccessBg;
+      borderStyle = 'solid';
+    } else if (isDragging) {
+      borderColor = theme.accent;
+      background = theme.dropDragBg;
+      borderStyle = 'solid';
+    }
+
+    return {
+      border: `2px ${borderStyle} ${borderColor}`,
+      borderRadius: '12px',
+      padding: '40px 24px',
+      textAlign: 'center',
+      transition: 'all 200ms',
+      cursor: 'pointer',
+      background,
+    };
+  };
+
+  const selectedFileStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '12px 16px',
+    background: theme.selectedBg,
+    borderRadius: '10px',
+    marginTop: '16px',
+  };
+
+  const footerStyle: React.CSSProperties = {
+    padding: '16px 24px',
+    borderTop: `1px solid ${theme.border}`,
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'flex-end',
+  };
+
+  const cancelBtnStyle: React.CSSProperties = {
+    border: 'none',
+    padding: '10px 20px',
+    borderRadius: '10px',
+    fontWeight: 600,
+    fontSize: '14px',
+    cursor: 'pointer',
+    background: theme.btnCancelBg,
+    color: theme.btnCancelText,
+    transition: 'all 150ms',
+  };
+
+  const uploadBtnStyle: React.CSSProperties = {
+    border: 'none',
+    padding: '10px 20px',
+    borderRadius: '10px',
+    fontWeight: 600,
+    fontSize: '14px',
+    cursor: selectedFile ? 'pointer' : 'not-allowed',
+    background: selectedFile ? theme.accent : theme.btnDisabled,
+    color: '#fff',
+    transition: 'all 150ms',
+  };
+
+  const removeButtonStyle: React.CSSProperties = {
+    border: 'none',
+    background: theme.removeBg,
+    color: theme.removeText,
+    width: '28px',
+    height: '28px',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    transition: 'all 150ms',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
 
   return ReactDOM.createPortal(
-    <div className={`file-upload-modal-wrapper ${visible ? "open" : ""}`}>
-      <div className={`file-upload-overlay ${visible ? "open" : ""}`} onClick={onClose} />
-      <div className={`file-upload-modal ${visible ? "open" : ""}`}>
-        <div className="file-upload-header">
-          <h3>📎 Attach File</h3>
-          <button className="file-upload-close" onClick={onClose}>✕</button>
+    <div style={wrapperStyle}>
+      <div style={overlayStyle} onClick={onClose} aria-hidden />
+      <div style={modalStyle}>
+        <div style={headerStyle}>
+          <h3 style={titleStyle}>📎 Attach File</h3>
+          <button style={closeButtonStyle} onClick={onClose} aria-label="Close">✕</button>
         </div>
-        <div className="file-upload-body">
+        <div style={bodyStyle}>
           <div
-            className={`file-drop-zone ${isDragging ? "dragging" : ""} ${selectedFile ? "has-file" : ""}`}
+            style={getDropZoneStyle()}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            onClick={handleZoneClick}
+            onClick={() => fileInputRef.current?.click()}
           >
-            <div className="drop-icon">{selectedFile ? "✅" : "📄"}</div>
-            <div className="drop-title">
-              {selectedFile ? "File selected!" : "Drag & drop your file here"}
+            <div style={{ fontSize: '48px', marginBottom: '12px', opacity: 0.6 }}>📄</div>
+            <div style={{ fontSize: '15px', fontWeight: 600, color: theme.textLabel, marginBottom: '6px' }}>
+              Drag & drop your file here
             </div>
-            <div className="drop-subtitle">
-              {selectedFile ? "Click to change file" : "or click to browse"}
+            <div style={{ fontSize: '13px', color: theme.textMuted }}>
+              or click to browse
             </div>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            style={{ display: "none" }}
-            onChange={handleFileInput}
-            accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleFileChange}
           />
           {selectedFile && (
-            <div className="file-selected">
-              <span className="file-selected-icon">📄</span>
-              <div className="file-selected-info">
-                <div className="file-selected-name">{selectedFile.name}</div>
-                <div className="file-selected-size">{formatFileSize(selectedFile.size)}</div>
+            <div style={selectedFileStyle}>
+              <span style={{ fontSize: '24px' }}>📎</span>
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontSize: '14px', fontWeight: 500, color: theme.text, wordBreak: 'break-all' }}>
+                  {selectedFile.name}
+                </div>
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>
+                  {formatFileSize(selectedFile.size)}
+                </div>
               </div>
-              <button className="file-remove" onClick={handleRemoveFile} title="Remove file">✕</button>
+              <button
+                style={removeButtonStyle}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedFile(null);
+                }}
+              >
+                ✕
+              </button>
             </div>
           )}
         </div>
-        <div className="file-upload-footer">
-          <button className="file-upload-btn file-upload-btn-cancel" onClick={onClose}>Cancel</button>
-          <button 
-            className="file-upload-btn file-upload-btn-upload" 
+        <div style={footerStyle}>
+          <button style={cancelBtnStyle} onClick={onClose}>Cancel</button>
+          <button
+            style={uploadBtnStyle}
             onClick={handleUpload}
             disabled={!selectedFile}
           >

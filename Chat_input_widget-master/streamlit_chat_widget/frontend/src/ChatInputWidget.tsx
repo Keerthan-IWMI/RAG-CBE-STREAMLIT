@@ -14,6 +14,7 @@ interface ChatInputWidgetProps extends ComponentProps {
   args: {
     pdf_data?: string;
     pdf_filename?: string;
+    dark_mode?: boolean;
   };
 }
 
@@ -28,6 +29,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   // Pdf data from args (used for download)
   const pdfData = args.pdf_data ?? null;
   const pdfFilename = args.pdf_filename ?? "conversation.pdf";
+  const darkMode = args.dark_mode ?? false;
 
   useEffect(() => {
     Streamlit.setFrameHeight();
@@ -100,14 +102,22 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
 
   const onRecordingStateChange = (v: boolean) => setIsRecording(v);
 
+  // Dynamic dark mode styles for chat bar
+  const chatBarStyle: React.CSSProperties = darkMode ? {
+    background: '#1e293b',
+    borderColor: '#334155',
+    boxShadow: '0 -4px 20px rgba(0,0,0,0.3)',
+  } : {};
+
   return (
-    <div className="chat-bar-container">
+    <div className={`chat-bar-container ${darkMode ? 'dark-mode' : ''}`} style={chatBarStyle}>
       <ActionButtons
         onDownload={handleDownload}
         onAttach={handleAttach}
         onToggleFilter={onToggleFilter}
         showFilter={showFilter}
         pdfDataAvailable={!!pdfData}
+        darkMode={darkMode}
         filterPopover={
           <FilterSidebar
             visible={showFilter}
@@ -115,19 +125,20 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
             onChange={(k, v) => setFilters((prev) => ({ ...prev, [k]: v }))}
             onApply={handleApplyFilter}
             onCancel={handleCancelFilter}
+            darkMode={darkMode}
           />
         }
       />
 
-      <InputField value={inputText} onChange={setInputText} onKeyPress={handleKeyPress} placeholder="Start typing to talk with RAG Agent" />
+      <InputField value={inputText} onChange={setInputText} onKeyPress={handleKeyPress} placeholder="Start typing to talk with RAG Agent" darkMode={darkMode} />
 
       <div className="right-actions">
         {isRecording && <RecordingIndicator />}
-        <MicButton onSendAudio={handleSendAudio} onRecordingChange={onRecordingStateChange} />
-        <SendButton active={!!inputText.trim()} onClick={handleSendText} />
+        <MicButton onSendAudio={handleSendAudio} onRecordingChange={onRecordingStateChange} darkMode={darkMode} />
+        <SendButton active={!!inputText.trim()} onClick={handleSendText} darkMode={darkMode} />
       </div>
 
-      <FileUploadModal visible={showFileUpload} onClose={handleFileUploadClose} />
+      <FileUploadModal visible={showFileUpload} onClose={handleFileUploadClose} darkMode={darkMode} />
     </div>
   );
 };

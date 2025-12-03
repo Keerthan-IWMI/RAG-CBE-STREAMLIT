@@ -5,9 +5,18 @@ interface InputFieldProps {
   onChange: (v: string) => void;
   onKeyPress: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   placeholder?: string;
+  darkMode?: boolean;
 }
 
-const InputField: React.FC<InputFieldProps> = ({ value, onChange, onKeyPress, placeholder }) => {
+const InputField: React.FC<InputFieldProps> = ({ value, onChange, onKeyPress, placeholder, darkMode = false }) => {
+  const style: React.CSSProperties = darkMode ? {
+    background: 'transparent',
+    color: '#f1f5f9',
+    border: 'none',
+  } : {
+    background: 'transparent',
+  };
+
   return (
     <input
       type="text"
@@ -16,6 +25,7 @@ const InputField: React.FC<InputFieldProps> = ({ value, onChange, onKeyPress, pl
       value={value}
       onKeyDown={onKeyPress}
       onChange={(e) => onChange((e.target as HTMLInputElement).value)}
+      style={style}
     />
   );
 };

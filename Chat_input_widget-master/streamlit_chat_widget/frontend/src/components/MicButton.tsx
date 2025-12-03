@@ -5,9 +5,10 @@ import StopIcon from "@mui/icons-material/Stop";
 interface MicButtonProps {
   onSendAudio: (base64: string) => void;
   onRecordingChange?: (isRecording: boolean) => void;
+  darkMode?: boolean;
 }
 
-const MicButton: React.FC<MicButtonProps> = ({ onSendAudio, onRecordingChange }) => {
+const MicButton: React.FC<MicButtonProps> = ({ onSendAudio, onRecordingChange, darkMode = false }) => {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -57,8 +58,13 @@ const MicButton: React.FC<MicButtonProps> = ({ onSendAudio, onRecordingChange })
     }
   };
 
+  const buttonStyle: React.CSSProperties = darkMode && !isRecording ? {
+    background: '#334155',
+    color: '#e2e8f0',
+  } : {};
+
   return (
-    <button className={`action-btn mic-btn ${isRecording ? "recording" : ""}`} title={isRecording ? "Stop recording" : "Start recording"} onClick={handleClick}>
+    <button className={`action-btn mic-btn ${isRecording ? "recording" : ""}`} title={isRecording ? "Stop recording" : "Start recording"} onClick={handleClick} style={buttonStyle}>
       {isRecording ? <StopIcon /> : <MicIcon />}
     </button>
   );
