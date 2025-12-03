@@ -13,8 +13,6 @@ const SUPPORT_EMAIL = "grzihvjc@sharklasers.com";
 
 const SupportModal: React.FC<SupportModalProps> = ({ visible, onClose, darkMode = false }) => {
   const [message, setMessage] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
   const portalRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -37,7 +35,6 @@ const SupportModal: React.FC<SupportModalProps> = ({ visible, onClose, darkMode 
       setTimeout(() => inputRef.current?.focus(), 100);
     }
     if (!visible) {
-      setSent(false);
       setMessage("");
     }
   }, [visible]);
@@ -53,18 +50,14 @@ const SupportModal: React.FC<SupportModalProps> = ({ visible, onClose, darkMode 
 
   const handleSend = () => {
     if (!message.trim()) return;
-    setSending(true);
     
     // Open mailto link
     const subject = encodeURIComponent("Support Request - CircularIQ");
     const body = encodeURIComponent(message);
     window.parent.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`, "_blank");
     
-    setSending(false);
-    setSent(true);
-    setTimeout(() => {
-      onClose();
-    }, 1500);
+    // Close modal immediately
+    onClose();
   };
 
   if (!portalRef.current) return null;
@@ -127,61 +120,53 @@ const SupportModal: React.FC<SupportModalProps> = ({ visible, onClose, darkMode 
           </button>
         </div>
 
-        {sent ? (
-          <div style={{ textAlign: 'center', padding: '20px 0', color: theme.text }}>
-            <div style={{ fontSize: '24px', marginBottom: '8px' }}>✓</div>
-            <div>Your email client should open now.</div>
-          </div>
-        ) : (
-          <>
-            <p style={{ margin: '0 0 12px', fontSize: '13px', color: theme.muted }}>
-              Describe your issue or question and we'll get back to you.
-            </p>
-            <textarea
-              ref={inputRef}
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Type your message here..."
-              rows={4}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '8px',
-                fontSize: '14px',
-                resize: 'none',
-                background: theme.inputBg,
-                color: theme.text,
-                outline: 'none',
-                boxSizing: 'border-box',
-              }}
-            />
-            <button
-              onClick={handleSend}
-              disabled={!message.trim() || sending}
-              style={{
-                marginTop: '12px',
-                width: '100%',
-                padding: '10px',
-                background: message.trim() ? '#0891b2' : theme.border,
-                color: message.trim() ? '#fff' : theme.muted,
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 500,
-                cursor: message.trim() ? 'pointer' : 'not-allowed',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                transition: 'background 150ms',
-              }}
-            >
-              <SendIcon style={{ fontSize: '16px' }} />
-              {sending ? 'Opening...' : 'Send Message'}
-            </button>
-          </>
-        )}
+        <p style={{ margin: '0 0 12px', fontSize: '13px', color: theme.muted }}>
+          Describe your issue or question and we'll get back to you.
+        </p>
+        <textarea
+          ref={inputRef}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Type your message here..."
+          rows={4}
+          style={{
+            width: '100%',
+            padding: '10px 12px',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '8px',
+            fontSize: '14px',
+            resize: 'none',
+            background: theme.inputBg,
+            color: theme.text,
+            outline: 'none',
+            boxSizing: 'border-box',
+          }}
+        />
+        <button
+          onClick={handleSend}
+          disabled={!message.trim()}
+          style={{
+            marginTop: '12px',
+            width: '100%',
+            padding: '10px 16px',
+            background: message.trim() ? '#0891b2' : theme.border,
+            color: message.trim() ? '#fff' : theme.muted,
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: 500,
+            cursor: message.trim() ? 'pointer' : 'not-allowed',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '6px',
+            transition: 'background 150ms',
+            lineHeight: 1,
+          }}
+        >
+          <SendIcon style={{ fontSize: '16px', width: '16px', height: '16px' }} />
+          <span>Send Message</span>
+        </button>
       </div>
     </div>
   );
