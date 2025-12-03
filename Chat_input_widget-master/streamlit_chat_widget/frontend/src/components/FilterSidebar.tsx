@@ -99,9 +99,6 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ visible, filters, onChang
 
   useEffect(() => {
     if (!visible || !targetDoc) return;
-    const t = window.setTimeout(() => {
-      rootRef.current?.querySelector("input")?.focus();
-    }, 60);
     const onDocClick = (e: MouseEvent) => {
       if (!rootRef.current) return;
       if (!(e.target instanceof Node)) return;
@@ -113,7 +110,6 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ visible, filters, onChang
     targetDoc.addEventListener("mousedown", onDocClick);
     targetDoc.addEventListener("keydown", onKeyDown);
     return () => {
-      clearTimeout(t);
       targetDoc.removeEventListener("mousedown", onDocClick);
       targetDoc.removeEventListener("keydown", onKeyDown);
     };
