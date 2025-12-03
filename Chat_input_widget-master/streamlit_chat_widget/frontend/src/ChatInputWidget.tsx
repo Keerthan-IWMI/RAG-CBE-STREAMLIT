@@ -22,7 +22,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
-  const [filters, setFilters] = useState<{ year?: string; author?: string; keywords?: string }>({ year: "", author: "", keywords: "" });
+  const [filters, setFilters] = useState<{ yearStart?: string; yearEnd?: string; author?: string; keywords?: string }>({ yearStart: "", yearEnd: "", author: "", keywords: "" });
   // no explicit anchor required for inline popover
 
   // Pdf data from args (used for download)

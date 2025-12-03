@@ -2,7 +2,8 @@ import React, { useCallback, useRef, useState, useEffect } from "react";
 import ReactDOM from "react-dom";
 
 interface FilterState {
-  year?: string;
+  yearStart?: string;
+  yearEnd?: string;
   author?: string;
   keywords?: string;
 }
@@ -68,7 +69,8 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ visible, filters, onChang
   const [targetDoc, setTargetDoc] = useState<Document | null>(null);
 
   const handleReset = useCallback(() => {
-    onChange("year", "");
+    onChange("yearStart", "");
+    onChange("yearEnd", "");
     onChange("author", "");
     onChange("keywords", "");
   }, [onChange]);
@@ -133,26 +135,24 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ visible, filters, onChang
           {/* Year Section */}
           <div className="filter-section">
             <div className="filter-label">
-              <span className="icon">📅</span> Year
+              <span className="icon">📅</span> Year Range
             </div>
-            <div className="filter-chips">
-              {YEAR_PRESETS.map((label) => (
-                <button
-                  key={label}
-                  className={`filter-chip ${filters.year === label ? "selected" : ""}`}
-                  onClick={() => onChange("year", filters.year === label ? "" : label)}
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input
+                className="filter-input"
+                value={filters.yearStart ?? ""}
+                onChange={(e) => onChange("yearStart", e.target.value)}
+                placeholder="From year"
+                style={{ flex: 1 }}
+              />
+              <input
+                className="filter-input"
+                value={filters.yearEnd ?? ""}
+                onChange={(e) => onChange("yearEnd", e.target.value)}
+                placeholder="To year"
+                style={{ flex: 1 }}
+              />
             </div>
-            <input
-              className="filter-input"
-              value={filters.year ?? ""}
-              onChange={(e) => onChange("year", e.target.value)}
-              placeholder="Or type a year..."
-            />
           </div>
 
           {/* Author Section */}
