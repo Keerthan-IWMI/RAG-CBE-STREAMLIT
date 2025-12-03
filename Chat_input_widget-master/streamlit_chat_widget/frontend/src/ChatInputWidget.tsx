@@ -15,8 +15,17 @@ interface ChatInputWidgetProps extends ComponentProps {
     pdf_data?: string;
     pdf_filename?: string;
     dark_mode?: boolean;
+    show_suggestions?: boolean;
   };
 }
+
+// Suggestion prompts for empty chat state
+const SUGGESTIONS = [
+  "Circular economy in agriculture",
+  "Wastewater reuse practices",
+  "Biochar applications",
+  "Compost for soil health",
+];
 
 const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const [inputText, setInputText] = useState("");
@@ -30,6 +39,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const pdfData = args.pdf_data ?? null;
   const pdfFilename = args.pdf_filename ?? "conversation.pdf";
   const darkMode = args.dark_mode ?? false;
+  const showSuggestions = args.show_suggestions ?? false;
 
   useEffect(() => {
     Streamlit.setFrameHeight();
@@ -109,8 +119,26 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
     boxShadow: '0 -4px 20px rgba(0,0,0,0.3)',
   } : {};
 
+  const handleSuggestionClick = (suggestion: string) => {
+    Streamlit.setComponentValue({ text: suggestion });
+  };
+
   return (
-    <div className={`chat-bar-container ${darkMode ? 'dark-mode' : ''}`} style={chatBarStyle}>
+    <div className="chat-widget-wrapper">
+      {showSuggestions && (
+        <div className={`suggestion-chips ${darkMode ? 'dark' : ''}`}>
+          {SUGGESTIONS.map((s, i) => (
+            <button
+              key={i}
+              className="suggestion-chip"
+              onClick={() => handleSuggestionClick(s)}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className={`chat-bar-container ${darkMode ? 'dark-mode' : ''}`} style={chatBarStyle}>
       <ActionButtons
         onDownload={handleDownload}
         onAttach={handleAttach}
@@ -139,6 +167,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
       </div>
 
       <FileUploadModal visible={showFileUpload} onClose={handleFileUploadClose} darkMode={darkMode} />
+    </div>
     </div>
   );
 };

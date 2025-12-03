@@ -424,3 +424,55 @@ a:focus-visible,
   .filter-drawer { width: 92vw; }
   .filter-drawer.open { transform: translateX(0); }
 }
+
+/* Suggestion chips */
+.chat-widget-wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  justify-content: center;
+}
+
+.suggestion-chip {
+  padding: 8px 14px;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+}
+
+.suggestion-chip:hover {
+  background: #f1f5f9;
+  border-color: #0891b2;
+  color: #0891b2;
+}
+
+.suggestion-chips.dark .suggestion-chip {
+  background: #334155;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+.suggestion-chips.dark .suggestion-chip:hover {
+  background: #475569;
+  border-color: #14b8a6;
+  color: #14b8a6;
+}
+
+@media (max-width: 600px) {
+  .suggestion-chip {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+}

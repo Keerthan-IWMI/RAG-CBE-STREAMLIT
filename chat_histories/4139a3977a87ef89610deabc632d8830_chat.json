@@ -1,35 +1,7 @@
 {
   "user_email": "totallygeneric9@gmail.com",
-  "timestamp": "2025-11-27T11:39:06.790998",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Hello.",
-      "references": []
-    },
-    {
-      "role": "assistant",
-      "content": "Hello! I'm the Circular Bioeconomy Decision Support Assistant (CBE-DSA), here to provide you with evidence-based insights from IWMI's research on sustainable waste management, resource recovery, and the circular bioeconomy.\n\nHow can I assist you with your work or research today?",
-      "references": [
-        {
-          "page_content": "Table 1: 1n#*n!#*!!!!n#*!#*n!!n!Moroccon!n! 2#* T! u! n!!!!s!!! ia!!!!!!!!#*!!!!!!!!!!!!!!!!!!!!!!ni!!!n!!!!!!!n!!!!!!!!!!!n! 3n!!#*! #*!!n#* \"S#*#*!!#*\"S#*!!!!!!n!n!#*#*n\"S Egypt!n! 4! 5n!!!!!!!!!!!!!!!!!!!!!!!!!!!! #*n!!nLebanon!!!!! \"S! _\"S!n_n\"Sn#*nKuwaitn#*nKSA \"Sn#*!\"S! #*#*#*! 6n!nBahrain #*!n!n#*\"S #*#*#*#* \"S!#*!!!! 7!!n!n!!n\"S#*n\"SnKSA (Riyadh) None None None None 8n!_!!\"S\"S#*!#* U!! \"S!#*!#*!!!!#*!!! #*!!!!!! #* O!n_ #*#*!!\"S\"S!! \"S A!!!!!E! #*!m!!!\"S!!!!!!#*!#*!!!!nan!n!",
-          "metadata": {
-            "source": "Mateo-Sagasta-2022-Water_reuse_in_the_Middle_East_and_North_Africa_a_sourcebook.pdf",
-            "page": 47,
-            "type": "table"
-          }
-        },
-        {
-          "page_content": "56;(7730*()3, 4,+0490:2 3690:2 /0./90:2 56;(7730*()3, 4,+0490:2 3690:2 /0./90:",
-          "metadata": {
-            "source": "Drechsel-2018-Wastewater_for_agriculture_forestry_and_aquaculture-Section_IV.pdf",
-            "page": 56,
-            "type": "paragraph"
-          }
-        }
-      ]
-    }
-  ],
-  "total_queries": 1,
+  "timestamp": "2025-12-03T16:05:06.529212",
+  "messages": [],
+  "total_queries": 0,
   "model": "DeepSeek"
 }
