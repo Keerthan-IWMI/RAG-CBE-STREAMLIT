@@ -522,7 +522,14 @@ class RAGPipeline:
             llm_type=self.llm_type,
             reserve_tokens=reserve_tokens
         )
-        
+
+        #Token swapping
+        self.hf_tokens = [model_params["hf_token"]]
+        for i in range(1, 11):  # Covers hf_backup_token_1 to hf_backup_token_10
+            backup_key = f"hf_backup_token_{i}"
+            if backup_key in model_params:
+                self.hf_tokens.append(model_params[backup_key])
+
         # ------------------------------------------------------------------
         # 3. Azure OpenAI
         # ------------------------------------------------------------------
@@ -858,7 +865,15 @@ CONVERSATION FLOW & ENGAGEMENT (MANDATORY)
 Information Use:
 - For general/greeting questions, ignore retrieved content and respond from general knowledge.
 - For research-specific queries, rely strictly on IWMI sources.
-Your mission is to provide support to science-based decision-making and accelerate the adoption of optimized circular bioeconomy business models, guided by IWMI’s validated research and expertise."""
+Your mission is to provide support to science-based decision-making and accelerate the adoption of optimized circular bioeconomy business models, guided by IWMI’s validated research and expertise.
+\n
+CONVERSATION MEMORY:
+- You have access to the full conversation history (all previous user and assistant messages).
+- If the user refers to previous messages, questions, or responses (e.g., "what was my 13th question", "remember when I asked about...", "what did you say about..."), use the conversation history to provide accurate information.
+- Count user messages to determine ordinal positions (e.g., first question = first user message, second question = second user message).
+- If asked about something not in the history, say so politely and suggest rephrasing.
+- For meta-queries about the conversation itself, ignore the default Response Format and provide a direct, natural answer."""
+
         
         user_prompt = f"""CONTEXT FROM DOCUMENTS:
 {context}
@@ -917,19 +932,23 @@ ANSWER (with citations):"""
                 }
 
                 logger.info(f"Calling DeepSeek API ({len(messages)} msgs)")
-                r = requests.post(self.deepseek_url, headers=headers, json=payload, timeout=60)
-
-                if r.status_code == 200:
-                    data = r.json()
-                    if data.get("choices"):
-                        return data["choices"][0]["message"]["content"].strip()
-                    else:
-                        logger.error(f"DeepSeek unexpected payload: {data}")
-                        return "Error: Unexpected DeepSeek response"
-                else:
-                    err = f"DeepSeek API {r.status_code}: {r.text}"
-                    logger.error(err)
-                    return f"Sorry, model error: {err}"
+                for token in self.hf_tokens:
+                    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+                    try:
+                        r = requests.post(self.deepseek_url, headers=headers, json=payload, timeout=60)
+                        if r.status_code == 200:
+                            data = r.json()
+                            if data.get("choices"):
+                                return data["choices"][0]["message"]["content"].strip()
+                        elif r.status_code == 401:  # Token expired/invalid
+                            continue  # Try next token
+                        else:
+                            logger.error(f"DeepSeek API {r.status_code}: {r.text}")
+                            return f"Sorry, model error: {r.status_code} - {r.text}"
+                    except Exception as e:
+                        logger.error(f"DeepSeek failure with token: {e}")
+                        continue  # Try next token
+                return "Sorry, all tokens failed."
 
         except Exception as e:
             logger.error(f"LLM failure ({self.llm_type}): {e}")
