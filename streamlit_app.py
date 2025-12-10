@@ -2,9 +2,9 @@ import streamlit as st
 from datetime import datetime
 import json
 import os
-from io import BytesIO
 from fpdf import FPDF
 import hashlib
+from uuid import uuid4
 import requests #for Whisper
 import base64
 from streamlit_chat_widget import chat_input_widget
@@ -86,13 +86,34 @@ def save_chat_history(email: str, messages: list, total_queries: int, model: str
             
             serializable_messages.append(msg_copy)
         
+        # Preserve any existing title when overwriting the saved chat file, but only
+        # if there are messages present (so newly created empty sessions don't inherit
+        # a previous title when 'New' or 'Clear' is used).
+        existing_title = None
+        try:
+            # prefer session state's saved_chat title if available
+            existing_title = st.session_state.get("saved_chat", {}).get("title") if isinstance(st.session_state.get("saved_chat"), dict) else None
+        except Exception:
+            existing_title = None
+
+        # If not present in session state, read from existing file
+        if not existing_title and os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                    existing_title = existing.get("title")
+            except Exception:
+                existing_title = None
+
         chat_data = {
             "user_email": email,
             "timestamp": datetime.now().isoformat(),
             "messages": serializable_messages,
             "total_queries": total_queries,
-            "model": model
+            "model": model,
         }
+        if existing_title and messages:
+            chat_data["title"] = existing_title
         
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(chat_data, f, indent=2, ensure_ascii=False)
@@ -128,6 +149,156 @@ def delete_chat_history(email: str) -> bool:
     except Exception as e:
         print(f"Error deleting chat history: {e}")
         return False
+
+# ---------- Archive helpers (minimal) ----------
+def _archive_filename_for(email: str, timestamp: str, title: str | None = None) -> str:
+    safe_email = hashlib.md5(email.encode("utf-8")).hexdigest()
+    uid = uuid4().hex[:8]
+    if title:
+        slug = "".join(c if c.isalnum() else "_" for c in title)[:40]
+        return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_archive_{timestamp}_{slug}_{uid}.json")
+    return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_archive_{timestamp}_{uid}.json")
+
+def archive_current_history(email: str) -> str | None:
+    """Create an independent archived copy of the current saved chat. Returns archive path."""
+    try:
+        current = get_chat_history_file(email)
+        if not os.path.exists(current):
+            return None
+        # Load current file and write a copy to an archive filename (avoid moving/overwriting)
+        try:
+            with open(current, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return None
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archive_path = _archive_filename_for(email, ts)
+        with open(archive_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return archive_path
+    except Exception as e:
+        print(f"Error archiving chat history: {e}")
+        return None
+
+def archive_messages(email: str, messages: list, total_queries: int = 0, model: str = None, title: str | None = None) -> str | None:
+    """Create an archive file from an in-memory messages list. Returns archive path."""
+    try:
+        if not messages:
+            return None
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archive_path = _archive_filename_for(email, ts, title)
+        chat_data = {
+            "user_email": email,
+            "timestamp": datetime.now().isoformat(),
+            "title": title or "",
+            "messages": messages,
+            "total_queries": total_queries,
+            "model": model or st.session_state.get("model")
+        }
+        with open(archive_path, "w", encoding="utf-8") as f:
+            json.dump(chat_data, f, indent=2, ensure_ascii=False)
+        return archive_path
+    except Exception as e:
+        print(f"Error archiving messages: {e}")
+        return None
+
+def rename_saved_chat(email: str, new_title: str) -> bool:
+    """Update the title field in the current saved chat file."""
+    try:
+        path = get_chat_history_file(email)
+        if not os.path.exists(path):
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["title"] = new_title
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error renaming saved chat: {e}")
+        return False
+
+def list_archived_histories(email: str) -> list:
+    try:
+        safe = hashlib.md5(email.encode("utf-8")).hexdigest()
+        files = []
+        if os.path.exists(CHAT_HISTORY_DIR):
+            for fn in os.listdir(CHAT_HISTORY_DIR):
+                if fn.startswith(f"{safe}_archive_") and fn.endswith(".json"):
+                    files.append(os.path.join(CHAT_HISTORY_DIR, fn))
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return files
+    except Exception as e:
+        print(f"Error listing archives: {e}")
+        return []
+
+def load_archived_history(path: str) -> dict | None:
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading archive {path}: {e}")
+        return None
+
+def delete_archived_history(path: str) -> bool:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error deleting archive {path}: {e}")
+        return False
+
+def rename_archived_history(path: str, new_title: str) -> str | None:
+    try:
+        if not os.path.exists(path):
+            return None
+        basename = os.path.basename(path)
+        parts = basename.split("_archive_")
+        if len(parts) < 2:
+            return None
+        prefix = parts[0]
+        # Use a high-resolution timestamp (including microseconds) to avoid collisions
+        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S_%f")
+        slug = "".join(c if c.isalnum() else "_" for c in new_title)[:60]
+        new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}.json")
+        # Update the file's internal JSON 'title' so the display uses the new title, then rename the file
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+        if data is not None:
+            try:
+                data["title"] = new_title
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+        # Finally rename the file to include the slug in the filename
+        # If new_path already exists, append a short uid to avoid accidental overwrite
+        if os.path.exists(new_path):
+            try:
+                alt_new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}_{uuid4().hex[:6]}.json")
+                os.replace(path, alt_new_path)
+                return alt_new_path
+            except Exception:
+                return path
+        else:
+            try:
+                os.replace(path, new_path)
+                return new_path
+            except Exception:
+                return path
+    except Exception as e:
+        print(f"Error renaming archive {path}: {e}")
+        return None
 
 # ------------------- CUSTOM CSS -------------------
 
@@ -883,6 +1054,10 @@ def init_session_state():
         st.session_state.is_switching = False
     if "dark_mode" not in st.session_state:
         st.session_state.dark_mode = False
+    if "saved_chat" not in st.session_state:
+        st.session_state.saved_chat = None
+    if "chat_loaded" not in st.session_state:
+        st.session_state.chat_loaded = False
 
 # ------------------- RAG PIPELINE -------------------
 
@@ -1091,13 +1266,19 @@ def main():
     user_email = st.session_state.google_user.get("email")
     st.session_state.user_email = user_email
     
-    # Load chat history from file on first run
-    if "chat_loaded" not in st.session_state:
+    # Load chat history from file once per session (value-based check)
+    if not st.session_state.get("chat_loaded", False):
         chat_data = load_chat_history(user_email)
         if chat_data:
-            st.session_state.messages = chat_data.get("messages", [])
-            st.session_state.total_queries = chat_data.get("total_queries", 0)
-            st.session_state.model = chat_data.get("model", "DeepSeek")
+            # keep saved chat for sidebar
+            st.session_state.saved_chat = chat_data
+            st.session_state.total_queries = chat_data.get("total_queries", st.session_state.total_queries)
+            st.session_state.model = chat_data.get("model", st.session_state.model)
+            # Restore the messages to the main conversation on page reload if there are saved messages
+            # so refresh resumes the conversation where the user left off (improves UX).
+            saved_messages = chat_data.get("messages", [])
+            if saved_messages:
+                st.session_state.messages = saved_messages
         st.session_state.chat_loaded = True
     
     # Show user info in sidebar
@@ -1175,6 +1356,12 @@ def main():
         .section-content {{
             margin-bottom: 0.5rem;
         }}
+        /* Ensure action buttons and inputs in the Past conversations expander use full width */
+        .streamlit-expander .stButton>button, .streamlit-expander .stDownloadButton>button, .streamlit-expander .stTextInput>div>input {{
+            width: 100% !important;
+            box-sizing: border-box;
+            white-space: normal !important;
+        }}
         </style>
         """, unsafe_allow_html=True)
         
@@ -1213,27 +1400,92 @@ def main():
         
         # Chat Management - without section box
         st.markdown('<div class="section-content">', unsafe_allow_html=True)
+        # Helper: extract first user message to use as a conversation title (minimal, single-line)
+        def _first_user_title_from_msgs(msgs:list) -> str | None:
+            try:
+                for m in msgs:
+                    if isinstance(m, dict) and m.get('role') == 'user' and m.get('content'):
+                        first_line = str(m.get('content')).strip().splitlines()[0]
+                        # Remove obvious UI emojis that we use for archive labels so the title is clean
+                        first_line = first_line.replace('📦','').replace('🎁','').strip()
+                        if len(first_line) > 60:
+                            return first_line[:57] + '...'
+                        return first_line
+            except Exception:
+                return None
+            return None
+
         col1, col2 = st.columns(2)
         
         with col1:
             if st.button("🔄 New", use_container_width=True, help="Start a new conversation"):
+                # Archive the current in-memory conversation (best-effort) before resetting.
+                archived_in_memory = False
+                try:
+                    msgs = st.session_state.get("messages", [])
+                    if msgs:
+                        # Prefer first user question as title, fallback to saved title if present
+                        title = _first_user_title_from_msgs(msgs) or None
+                        if not title:
+                            saved = st.session_state.get("saved_chat")
+                            if saved and isinstance(saved, dict):
+                                title = saved.get("title")
+                        archived = archive_messages(user_email, msgs, st.session_state.get("total_queries", 0), st.session_state.get("model"), title)
+                        if archived:
+                            archived_in_memory = True
+                            st.toast("Conversation archived.", icon="✅")
+                except Exception:
+                    pass
+
+                # Clear live conversation and start fresh
                 st.session_state.rag.clear_conversation()
                 st.session_state.messages = []
                 st.session_state.total_queries = 0
-                # Save to file
+
+                # Only archive the on-disk saved session if we did NOT already archive the live messages
+                # This avoids producing two archives for the same conversation (one from memory, one from disk).
+                try:
+                    if not archived_in_memory:
+                        archive_current_history(user_email)
+                except Exception:
+                    pass
+
+                # Ensure a fresh "current" file exists (empty)
                 save_chat_history(user_email, [], 0, st.session_state.model)
+                # Reload saved_chat info for sidebar
+                st.session_state.saved_chat = load_chat_history(user_email)
                 st.toast("✨ New conversation started!", icon="🎉")
                 st.rerun()
         
         with col2:
             if st.button("🗑️ Clear", use_container_width=True, help="Clear all messages"):
                 if len(st.session_state.messages) > 0:
+                    # Archive current conversation before clearing (best-effort)
+                    archived_in_memory = False
+                    try:
+                        msgs = st.session_state.get("messages", [])
+                        if msgs:
+                            title = _first_user_title_from_msgs(msgs) or None
+                            archived = archive_messages(user_email, msgs, st.session_state.get("total_queries", 0), st.session_state.get("model"), title)
+                            if archived:
+                                archived_in_memory = True
+                                st.toast("Conversation archived.", icon="✅")
+                    except Exception:
+                        pass
                     st.session_state.rag.clear_conversation() 
                     st.session_state.messages = []
                     st.session_state.total_queries = 0
-                    # Save to file
+                    # Only archive the on-disk saved session if we did NOT already archive the live messages
+                    try:
+                        if not archived_in_memory:
+                            archive_current_history(user_email)
+                    except Exception:
+                        pass
+                    # Save to file (empty current)
                     save_chat_history(user_email, [], 0, st.session_state.model)
-                    st.toast("🧹 Chat cleared!", icon="✅")
+                    # Refresh saved_chat so the sidebar shows the newly archived item above previous ones
+                    st.session_state.saved_chat = load_chat_history(user_email)
+                    st.toast("🗑️ Chat cleared!", icon="✅")
                     st.rerun()
                 else:
                     st.toast("⚠️ Chat is already empty!", icon="ℹ️")
@@ -1242,7 +1494,223 @@ def main():
         
         # Divider
         st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
-        
+
+        # Past Conversations expander (click item to restore; three-dot shows rename/delete)
+        with st.expander("💬 Conversations"):
+            # Scoped CSS: make expander's buttons and inputs compact to reduce cramped layout
+            st.markdown(
+                """
+                <style>
+                div[data-testid="stExpander"] .stButton button {
+                    padding: 4px 8px !important;
+                    font-size: 13px !important;
+                    height: auto !important;
+                    min-width: 36px !important;
+                    line-height: 18px !important;
+                    border-radius: 8px !important;
+                    background-color: rgba(6,182,212,0.06) !important;
+                    border: 1px solid rgba(15, 118, 110, 0.08) !important;
+                    text-align: left !important;
+                    white-space: nowrap !important;
+                    overflow: hidden !important;
+                    text-overflow: ellipsis !important;
+                    color: #064e4a !important;
+                }
+                div[data-testid="stExpander"] .stTextInput input {
+                    font-size: 13px !important;
+                    padding: 6px 8px !important;
+                }
+                .conv-row-sep { margin-top: 4px; margin-bottom: 4px; }
+                div[data-testid="stExpander"] .stMarkdown p { margin: 0; padding: 0; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            # Build a flat list: archived sessions first (newest first), then current saved (so archives stack above saved)
+            conv_list = []
+
+            # load archive files and sort by the JSON 'timestamp' field (newest first)
+            archive_files = list_archived_histories(user_email) or []
+            archives = []
+            for p in archive_files:
+                a = load_archived_history(p)
+                if not a:
+                    continue
+                # prefer embedded timestamp from the JSON, fallback to file modification time
+                ts_raw = a.get("timestamp")
+                ts_dt = None
+                try:
+                    if ts_raw:
+                        # handle trailing Z
+                        s = str(ts_raw)
+                        if s.endswith('Z'):
+                            s = s[:-1] + '+00:00'
+                        ts_dt = datetime.fromisoformat(s)
+                except Exception:
+                    ts_dt = None
+                if not ts_dt:
+                    try:
+                        ts_dt = datetime.fromtimestamp(os.path.getmtime(p))
+                    except Exception:
+                        ts_dt = datetime.now()
+
+                title = (a.get("title") or ts_dt.strftime("%Y-%m-%d %H:%M:%S"))
+                preview = (a.get("messages") and a.get("messages")[0].get("content", "")[:160]) or ""
+                archives.append({
+                    "type": "archive",
+                    "id": p,
+                    "title": title,
+                    "timestamp": a.get("timestamp", ts_dt.isoformat()),
+                    "preview": preview,
+                    "data": a,
+                    "path": p,
+                    "_ts_dt": ts_dt
+                })
+
+            # sort by parsed timestamp descending (newest first)
+            try:
+                archives = sorted(archives, key=lambda x: x.get("_ts_dt", datetime.now()), reverse=True)
+            except Exception:
+                archives = archives
+
+            # append sorted archives to the conv_list
+            for a in archives:
+                conv_list.append(a)
+
+            # Finally, append the current saved session so that archived items appear above it
+            saved = st.session_state.get("saved_chat")
+            if saved:
+                conv_list.append({
+                    "type": "current",
+                    "id": "current",
+                    "title": (saved.get("title") or "Current saved session").strip(),
+                    "timestamp": saved.get("timestamp", "unknown"),
+                    "preview": (saved.get("messages") and saved.get("messages")[0].get("content", "")[:160]) or "",
+                    "data": saved
+                })
+
+            if not conv_list:
+                st.markdown("_No saved or archived conversations found._")
+            else:
+                # Render each conversation as a row: left = restore button (full width), right = menu button
+                def _fmt_ts(ts):
+                    if not ts:
+                        return ""
+                    try:
+                        s = str(ts)
+                        # handle trailing Z
+                        if s.endswith('Z'):
+                            s = s[:-1] + '+00:00'
+                        dt = datetime.fromisoformat(s)
+                        return dt.strftime('%b %d %H:%M')
+                    except Exception:
+                        try:
+                            return str(ts)[:16]
+                        except Exception:
+                            return str(ts)
+
+                for idx, c in enumerate(conv_list):
+                    cols = st.columns([7,1,1])
+                    col_title, col_space, col_menu = cols[0], cols[1], cols[2]
+                    # Compact title (single-line) to avoid multi-line buttons in the sidebar
+                    short_title = c.get('title', '')
+                    if len(short_title) > 36:
+                        short_title = short_title[:33] + '...'
+                    display_ts = _fmt_ts(c.get('timestamp', ''))
+                    # Sanitize out certain emojis from titles (e.g. remove box/present icons inserted by user)
+                    sanitized = short_title.replace('📦', '').replace('🎁', '').strip()
+                    display_title = f"{sanitized}"
+
+                    # Title (clickable) and timestamp below
+                    with col_title:
+                        title_label = display_title
+                        if st.button(title_label, key=f"restore_label_{idx}", help=(c.get('preview') or ''), use_container_width=True):
+                                st.session_state.messages = c['data'].get('messages', [])
+                                st.session_state.total_queries = c['data'].get('total_queries', 0)
+                                st.session_state.model = c['data'].get('model', st.session_state.get('model'))
+                                # Persist the restored conversation as the 'current' saved session so that
+                                # a page refresh resumes the conversation where the user left off.
+                                try:
+                                    if st.session_state.messages:
+                                        save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+                                        # If the restored conversation has a title, persist it for the saved session
+                                        restored_title = c.get('title') or c.get('data', {}).get('title')
+                                        if restored_title:
+                                            try:
+                                                rename_saved_chat(user_email, restored_title)
+                                            except Exception:
+                                                pass
+                                        # Reload saved chat metadata for the sidebar
+                                        st.session_state.saved_chat = load_chat_history(user_email)
+                                except Exception:
+                                    pass
+                                st.toast("🔁 Conversation restored", icon="✅")
+                                st.rerun()
+                        # small timestamp below the title
+                        st.markdown(f"<div style='font-size:11px;color: #6b7280;margin-top:4px'>{display_ts}</div>", unsafe_allow_html=True)
+
+                    # Three-dot menu toggles inline options - use a separate widget key and a state key
+                    menu_btn_key = f"menu_btn_{idx}"
+                    menu_state_key = f"menu_toggle_{idx}"
+
+                    # Ensure there's a default state for the menu (closed)
+                    if menu_state_key not in st.session_state:
+                        st.session_state[menu_state_key] = False
+
+                    with col_menu:
+                        if st.button("⋯", key=menu_btn_key, help="Options: rename / delete"):
+                            # If opening this menu, close any other open menu to keep UI tidy
+                            will_open = not st.session_state.get(menu_state_key, False)
+                            for k in list(st.session_state.keys()):
+                                if k.startswith("menu_toggle_") and k != menu_state_key:
+                                    st.session_state[k] = False
+                            st.session_state[menu_state_key] = will_open
+
+                    # If menu open, show inline rename / delete controls
+                    if st.session_state.get(menu_state_key):
+                        with st.container():
+                            # Render rename input and actions inline to avoid vertical stacking
+                            action_cols = st.columns([3,1,1])
+                            with action_cols[0]:
+                                new_title = st.text_input("", key=f"rename_input_{idx}", value=c.get('title',''), placeholder="Rename", label_visibility="collapsed")
+                            with action_cols[1]:
+                                if st.button("✏️", key=f"apply_rename_{idx}", help="Rename conversation"):
+                                    # Rename current saved or archived
+                                    if c['type'] == 'current':
+                                        ok = rename_saved_chat(user_email, new_title)
+                                        if ok:
+                                            st.session_state.saved_chat = load_chat_history(user_email)
+                                            st.toast("✏️ Saved session renamed", icon="✅")
+                                            # Close any open menus and re-run to refresh display
+                                            st.session_state[menu_state_key] = False
+                                            st.rerun()
+                                    else:
+                                        okp = rename_archived_history(c['path'], new_title)
+                                        if okp:
+                                            st.toast("✏️ Archived session renamed", icon="✅")
+                                            # close this menu and refresh
+                                            st.session_state[menu_state_key] = False
+                                            st.rerun()
+                            with action_cols[2]:
+                                if st.button("🗑️", key=f"delete_item_{idx}", help="Delete conversation"):
+                                    if c['type'] == 'current':
+                                        delete_chat_history(user_email)
+                                        st.session_state.saved_chat = None
+                                        st.toast("🗑️ Deleted saved session", icon="✅")
+                                        st.session_state[menu_state_key] = False
+                                        st.rerun()
+                                    else:
+                                        okdel = delete_archived_history(c['path'])
+                                        if okdel:
+                                            st.toast("🗑️ Deleted archived session", icon="✅")
+                                            st.session_state[menu_state_key] = False
+                                            st.rerun()
+                    # Visual separation between conversation rows
+                    st.markdown('<div class="conv-row-sep"></div>', unsafe_allow_html=True)
+
+        # Divider
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
         st.markdown('<h4 class="control-panel-header">Export Chat</h4>', unsafe_allow_html=True)
         
         # Export Option - without section box
