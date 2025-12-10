@@ -17,3 +17,4 @@ hyperlink_and_chunker_changed_rag_pipeline.py
 hyperlink_and_chunker_changed_streamlit_app.py
 
 .streamlit_auth_tokens_*.json
+evaluation/
