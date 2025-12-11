@@ -18,3 +18,5 @@ hyperlink_and_chunker_changed_streamlit_app.py
 
 .streamlit_auth_tokens_*.json
 evaluation/
+water_copilot_md/
+SYSTEM_AND_DEVELOPMENT_SPEC.md
