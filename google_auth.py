@@ -20,7 +20,7 @@ class GoogleOAuth:
     def __init__(self):
         self.client_id = st.secrets["client_id"]
         self.client_secret = st.secrets["client_secret"]
-        self.redirect_uri = st.secrets.get("redirect_uri", "http://localhost:8501/oauth2callback")
+        self.redirect_uri = st.secrets.get("redirect_uri", "http://localhost:8501/")
         
         self.scope = (
             "https://www.googleapis.com/auth/userinfo.email "
