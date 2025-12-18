@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 from urllib.parse import urlencode
+from uuid import uuid4
 import time
 import json
 import os
@@ -252,7 +253,7 @@ def delete_tokens_from_file():
 def logout():
     """Enhanced logout - clear all session data and stored tokens"""
     keys_to_clear = [
-        'google_authenticated', 'google_user', 'google_access_token',
+        'google_authenticated', 'guest_authenticated', 'google_user', 'google_access_token',
         'google_refresh_token', 'session_start_time', 'token_expires_at',
         'messages', 'total_queries', 'chat_loaded' # Added chat keys
     ]
@@ -277,6 +278,28 @@ def check_google_auth():
     print(f"🔍 DEBUG - Auth Check Started")
     print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
     print(f"   query_params: {params}")
+
+    # ========== HANDLE GUEST LOGIN ==========
+    # Check for persistent guest_session param FIRST (survives refresh)
+    guest_session_val = params.get("guest_session")
+    if guest_session_val:
+        st.session_state.guest_authenticated = True
+        st.session_state.guest_session_id = guest_session_val
+        st.session_state.google_user = {"name": "Guest", "email": "guest@local", "picture": ""}
+        return True
+    # Then check session state (within same browser session)
+    if st.session_state.get("guest_authenticated"):
+        return True
+    # Initial guest login - set persistent param
+    if params.get("guest") == "1" or params.get("guest") == ["1"]:
+        st.session_state.guest_authenticated = True
+        st.session_state.google_user = {"name": "Guest", "email": "guest@local", "picture": ""}
+        session_id = uuid4().hex
+        st.session_state.guest_session_id = session_id
+        st.query_params.clear()
+        st.query_params["guest_session"] = session_id
+        st.rerun()
+        return True
 
     # ========== HANDLE OAUTH CALLBACK ==========
     if "code" in params:
@@ -603,6 +626,8 @@ def show_login_page(auth_url):
                 </svg>
                 Sign in with Google
             </a>
+            <a href="?guest=1" style="display:block; margin-top:20px; color:{TEXT_SECONDARY}; font-size:14px; text-decoration:none;">Login as Guest</a>
+            <div style="font-size:11px; color:#94a3b8; margin-top:4px;">Guest sessions are temporary</div>
             <div class="security-badge">
                 <span class="security-icon">🛡️</span>
                 Secure OAuth 2.0 Authentication • 2-Hour Session

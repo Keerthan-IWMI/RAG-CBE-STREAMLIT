@@ -30,6 +30,11 @@ DEEPSEEK_MODEL_NAME = "deepseek-ai/DeepSeek-V3.1:novita"
 
 CHAT_HISTORY_DIR = "chat_histories"
 
+# In-memory store for guest sessions (persists across reruns, not across server restarts)
+@st.cache_resource(show_spinner=False)
+def _guest_store():
+    return {}
+
 # Professional Color Palette
 PRIMARY_COLOR = "#0F766E"  # Teal
 SECONDARY_COLOR = "#06B6D4"  # Cyan
@@ -51,6 +56,9 @@ def get_chat_history_file(email: str) -> str:
 
 def save_chat_history(email: str, messages: list, total_queries: int, model: str):
     """Save chat history to JSON file for specific user"""
+    # Skip saving for guest users
+    if st.session_state.get("guest_authenticated"):
+        return True
     try:
         file_path = get_chat_history_file(email)
         
@@ -420,7 +428,7 @@ def load_custom_css(dark_mode=False):
     [data-testid="stChatMessageContent"] {{
         background-color: transparent !important;
     }}
-    
+
     /* User Messages */
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {{
         background: {"linear-gradient(135deg, #334155 0%, #475569 100%)" if dark_mode else "linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%)"};
@@ -1225,6 +1233,17 @@ def main():
         return
     
     init_session_state()
+
+    # For guests, restore conversation from in-memory cache keyed by guest_session
+    guest_session_id = st.query_params.get("guest_session")
+    if st.session_state.get("guest_authenticated") and guest_session_id:
+        store = _guest_store()
+        st.session_state.guest_session_id = guest_session_id
+        cached = store.get(guest_session_id)
+        if cached:
+            st.session_state.messages = cached.get("messages", [])
+            st.session_state.total_queries = cached.get("total_queries", 0)
+            st.session_state.model = cached.get("model", st.session_state.model)
     load_custom_css(st.session_state.dark_mode)
     
     # Inject dark mode class on body for React components to detect
@@ -1267,22 +1286,19 @@ def main():
     st.session_state.user_email = user_email
     
     # Load chat history from file once per session (value-based check)
+    # Skip disk load for guest users (guest state is in-memory cache)
     if not st.session_state.get("chat_loaded", False):
-        chat_data = load_chat_history(user_email)
-        if chat_data:
-            # keep saved chat for sidebar
-            st.session_state.saved_chat = chat_data
-            st.session_state.total_queries = chat_data.get("total_queries", st.session_state.total_queries)
-            st.session_state.model = chat_data.get("model", st.session_state.model)
-            # Restore the messages to the main conversation on page reload if there are saved messages
-            # so refresh resumes the conversation where the user left off (improves UX).
-            saved_messages = chat_data.get("messages", [])
-            if saved_messages:
-                st.session_state.messages = saved_messages
+        if not st.session_state.get("guest_authenticated"):
+            chat_data = load_chat_history(user_email)
+            if chat_data:
+                # keep saved chat for sidebar only - do NOT restore to main messages
+                st.session_state.saved_chat = chat_data
+                st.session_state.total_queries = chat_data.get("total_queries", st.session_state.total_queries)
+                st.session_state.model = chat_data.get("model", st.session_state.model)
         st.session_state.chat_loaded = True
     
     # Show user info in sidebar
-    if st.session_state.get("google_authenticated"):
+    if st.session_state.get("google_authenticated") or st.session_state.get("guest_authenticated"):
         user = st.session_state.google_user
         user_name = user.get('name', 'User')
         user_initial = get_user_initial(user_name)
@@ -1450,10 +1466,18 @@ def main():
                 except Exception:
                     pass
 
-                # Ensure a fresh "current" file exists (empty)
-                save_chat_history(user_email, [], 0, st.session_state.model)
-                # Reload saved_chat info for sidebar
-                st.session_state.saved_chat = load_chat_history(user_email)
+                if st.session_state.get("guest_authenticated") and st.session_state.get("guest_session_id"):
+                    store = _guest_store()
+                    store[st.session_state.guest_session_id] = {
+                        "messages": [],
+                        "total_queries": 0,
+                        "model": st.session_state.model,
+                    }
+                else:
+                    # Ensure a fresh "current" file exists (empty)
+                    save_chat_history(user_email, [], 0, st.session_state.model)
+                    # Reload saved_chat info for sidebar
+                    st.session_state.saved_chat = load_chat_history(user_email)
                 st.toast("✨ New conversation started!", icon="🎉")
                 st.rerun()
         
@@ -1481,10 +1505,18 @@ def main():
                             archive_current_history(user_email)
                     except Exception:
                         pass
-                    # Save to file (empty current)
-                    save_chat_history(user_email, [], 0, st.session_state.model)
-                    # Refresh saved_chat so the sidebar shows the newly archived item above previous ones
-                    st.session_state.saved_chat = load_chat_history(user_email)
+                    if st.session_state.get("guest_authenticated") and st.session_state.get("guest_session_id"):
+                        store = _guest_store()
+                        store[st.session_state.guest_session_id] = {
+                            "messages": [],
+                            "total_queries": 0,
+                            "model": st.session_state.model,
+                        }
+                    else:
+                        # Save to file (empty current)
+                        save_chat_history(user_email, [], 0, st.session_state.model)
+                        # Refresh saved_chat so the sidebar shows the newly archived item above previous ones
+                        st.session_state.saved_chat = load_chat_history(user_email)
                     st.toast("🗑️ Chat cleared!", icon="✅")
                     st.rerun()
                 else:
@@ -1632,16 +1664,24 @@ def main():
                                 # a page refresh resumes the conversation where the user left off.
                                 try:
                                     if st.session_state.messages:
-                                        save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
-                                        # If the restored conversation has a title, persist it for the saved session
-                                        restored_title = c.get('title') or c.get('data', {}).get('title')
-                                        if restored_title:
-                                            try:
-                                                rename_saved_chat(user_email, restored_title)
-                                            except Exception:
-                                                pass
-                                        # Reload saved chat metadata for the sidebar
-                                        st.session_state.saved_chat = load_chat_history(user_email)
+                                        if st.session_state.get("guest_authenticated") and st.session_state.get("guest_session_id"):
+                                            store = _guest_store()
+                                            store[st.session_state.guest_session_id] = {
+                                                "messages": st.session_state.messages,
+                                                "total_queries": st.session_state.total_queries,
+                                                "model": st.session_state.model,
+                                            }
+                                        else:
+                                            save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+                                            # If the restored conversation has a title, persist it for the saved session
+                                            restored_title = c.get('title') or c.get('data', {}).get('title')
+                                            if restored_title:
+                                                try:
+                                                    rename_saved_chat(user_email, restored_title)
+                                                except Exception:
+                                                    pass
+                                            # Reload saved chat metadata for the sidebar
+                                            st.session_state.saved_chat = load_chat_history(user_email)
                                 except Exception:
                                     pass
                                 st.toast("🔁 Conversation restored", icon="✅")
@@ -1965,7 +2005,15 @@ def main():
         # Add user message to session state
         st.session_state.messages.append({"role": "user", "content": prompt})
         # Persist user message immediately to avoid losing it if processing fails
-        save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+        if st.session_state.get("guest_authenticated") and st.session_state.get("guest_session_id"):
+            store = _guest_store()
+            store[st.session_state.guest_session_id] = {
+                "messages": st.session_state.messages,
+                "total_queries": st.session_state.total_queries,
+                "model": st.session_state.model,
+            }
+        else:
+            save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
         
         # Process with RAG
         with st.spinner("🔍 Analyzing IWMI research documents..."):
@@ -1993,7 +2041,15 @@ def main():
                 })
         
         # Save chat history to file after each message
-        save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+        if st.session_state.get("guest_authenticated") and st.session_state.get("guest_session_id"):
+            store = _guest_store()
+            store[st.session_state.guest_session_id] = {
+                "messages": st.session_state.messages,
+                "total_queries": st.session_state.total_queries,
+                "model": st.session_state.model,
+            }
+        else:
+            save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
         
         # Rerun to display the updated messages
         st.rerun()
