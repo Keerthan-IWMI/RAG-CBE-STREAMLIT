@@ -180,6 +180,23 @@ def archive_current_history(email: str) -> str | None:
         except Exception:
             return None
 
+        # Check if this content is already archived (compare with most recent archive)
+        archives = list_archived_histories(email)
+        if archives:
+            last_archive = load_archived_history(archives[0])
+            if last_archive:
+                # Compare messages content
+                current_msgs = data.get("messages", [])
+                last_msgs = last_archive.get("messages", [])
+                if len(current_msgs) == len(last_msgs):
+                    is_duplicate = True
+                    for i, msg in enumerate(current_msgs):
+                        if msg.get("content") != last_msgs[i].get("content"):
+                            is_duplicate = False
+                            break
+                    if is_duplicate:
+                        return archives[0]
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         archive_path = _archive_filename_for(email, ts)
         with open(archive_path, "w", encoding="utf-8") as f:
@@ -194,6 +211,23 @@ def archive_messages(email: str, messages: list, total_queries: int = 0, model: 
     try:
         if not messages:
             return None
+            
+        # Check for duplicates against the most recent archive
+        archives = list_archived_histories(email)
+        if archives:
+            last_archive = load_archived_history(archives[0])
+            if last_archive:
+                # Compare messages content
+                last_msgs = last_archive.get("messages", [])
+                if len(messages) == len(last_msgs):
+                    is_duplicate = True
+                    for i, msg in enumerate(messages):
+                        if msg.get("content") != last_msgs[i].get("content"):
+                            is_duplicate = False
+                            break
+                    if is_duplicate:
+                        return archives[0]
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         archive_path = _archive_filename_for(email, ts, title)
         chat_data = {
@@ -1290,11 +1324,40 @@ def main():
     if not st.session_state.get("chat_loaded", False):
         if not st.session_state.get("guest_authenticated"):
             chat_data = load_chat_history(user_email)
-            if chat_data:
-                # keep saved chat for sidebar only - do NOT restore to main messages
-                st.session_state.saved_chat = chat_data
-                st.session_state.total_queries = chat_data.get("total_queries", st.session_state.total_queries)
-                st.session_state.model = chat_data.get("model", st.session_state.model)
+            
+            # Check for session persistence via URL query params
+            # If 'session' param exists, it's a reload -> Restore chat.
+            # If 'session' param missing, it's a new tab/login -> New chat.
+            try:
+                query_params = st.query_params
+                session_id_param = query_params.get("session")
+            except Exception:
+                session_id_param = None
+
+            if not session_id_param:
+                # NEW SESSION: Archive old, start fresh
+                if chat_data and chat_data.get("messages"):
+                    archive_current_history(user_email)
+                
+                st.session_state.messages = []
+                st.session_state.total_queries = 0
+                st.session_state.model = chat_data.get("model", st.session_state.model) if chat_data else "DeepSeek"
+                st.session_state.saved_chat = None
+                save_chat_history(user_email, [], 0, st.session_state.model)
+                
+                # Set new session ID in URL to track this session across reloads
+                try:
+                    st.query_params["session"] = uuid4().hex
+                except Exception:
+                    pass
+            else:
+                # RELOAD: Restore current chat
+                if chat_data:
+                    st.session_state.saved_chat = chat_data
+                    st.session_state.messages = chat_data.get("messages", [])
+                    st.session_state.total_queries = chat_data.get("total_queries", 0)
+                    st.session_state.model = chat_data.get("model", st.session_state.model)
+                 
         st.session_state.chat_loaded = True
     
     # Show user info in sidebar
@@ -1323,6 +1386,19 @@ def main():
             
             # Actual Streamlit logout button
             if st.button("↗️ Sign Out", key="logout_btn", use_container_width=True):
+                # Auto-save (archive) current session before signing out
+                try:
+                    if st.session_state.messages:
+                        archive_current_history(user_email)
+                except Exception:
+                    pass
+                
+                # Clear session param
+                try:
+                    st.query_params.clear()
+                except Exception:
+                    pass
+
                 # Import logout function
                 from google_auth import logout
                 logout()
@@ -1612,14 +1688,31 @@ def main():
             # Finally, append the current saved session so that archived items appear above it
             saved = st.session_state.get("saved_chat")
             if saved:
-                conv_list.append({
-                    "type": "current",
-                    "id": "current",
-                    "title": (saved.get("title") or "Current saved session").strip(),
-                    "timestamp": saved.get("timestamp", "unknown"),
-                    "preview": (saved.get("messages") and saved.get("messages")[0].get("content", "")[:160]) or "",
-                    "data": saved
-                })
+                # Check if current saved session is identical to ANY archive to avoid visual duplication
+                is_duplicate_of_archive = False
+                saved_msgs = saved.get("messages", [])
+                if saved_msgs: # Only check if there are messages
+                    for arch in archives:
+                        arch_msgs = arch.get("data", {}).get("messages", [])
+                        if len(saved_msgs) == len(arch_msgs):
+                            match = True
+                            for i, msg in enumerate(saved_msgs):
+                                if msg.get("content") != arch_msgs[i].get("content"):
+                                    match = False
+                                    break
+                            if match:
+                                is_duplicate_of_archive = True
+                                break
+                
+                if not is_duplicate_of_archive:
+                    conv_list.append({
+                        "type": "current",
+                        "id": "current",
+                        "title": (saved.get("title") or "Current saved session").strip(),
+                        "timestamp": saved.get("timestamp", "unknown"),
+                        "preview": (saved.get("messages") and saved.get("messages")[0].get("content", "")[:160]) or "",
+                        "data": saved
+                    })
 
             if not conv_list:
                 st.markdown("_No saved or archived conversations found._")
@@ -2000,6 +2093,14 @@ def main():
                         st.session_state.messages[status_idx]["content"] = "⚠️ Transcription failed."
                 # persist changes
                 save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+                # Update saved_chat to keep sidebar in sync
+                st.session_state.saved_chat = {
+                    "user_email": user_email,
+                    "messages": st.session_state.messages,
+                    "total_queries": st.session_state.total_queries,
+                    "model": st.session_state.model,
+                    "title": st.session_state.saved_chat.get("title") if st.session_state.get("saved_chat") else None
+                }
 
     if prompt:
         # Add user message to session state
@@ -2014,6 +2115,14 @@ def main():
             }
         else:
             save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+            # Update saved_chat to keep sidebar in sync
+            st.session_state.saved_chat = {
+                "user_email": user_email,
+                "messages": st.session_state.messages,
+                "total_queries": st.session_state.total_queries,
+                "model": st.session_state.model,
+                "title": st.session_state.saved_chat.get("title") if st.session_state.get("saved_chat") else None
+            }
         
         # Process with RAG
         with st.spinner("🔍 Analyzing IWMI research documents..."):
@@ -2050,6 +2159,14 @@ def main():
             }
         else:
             save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
+            # Update saved_chat to keep sidebar in sync
+            st.session_state.saved_chat = {
+                "user_email": user_email,
+                "messages": st.session_state.messages,
+                "total_queries": st.session_state.total_queries,
+                "model": st.session_state.model,
+                "title": st.session_state.saved_chat.get("title") if st.session_state.get("saved_chat") else None
+            }
         
         # Rerun to display the updated messages
         st.rerun()
