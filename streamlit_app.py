@@ -5,16 +5,19 @@ import os
 from fpdf import FPDF
 import hashlib
 from uuid import uuid4
-import requests #for Whisper
+import requests
 import base64
 from streamlit_chat_widget import chat_input_widget
 from streamlit_float import float_init
-import base64
-
+import tiktoken
+import logging
 
 # Import RAG pipeline
-from rag_pipeline import RAGPipeline
-from google_auth import check_google_auth  # Import the auth function
+from cbe_agent import RAGPipeline
+from google_auth import check_google_auth
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ------------------- CONFIG -------------------
 PDF_FOLDER = "C://iwmi-remote-work//CBE-Chatbot//New folder//cbe//agri and waste water"
@@ -30,319 +33,38 @@ DEEPSEEK_MODEL_NAME = "deepseek-ai/DeepSeek-V3.1:novita"
 
 CHAT_HISTORY_DIR = "chat_histories"
 
-# In-memory store for guest sessions (persists across reruns, not across server restarts)
-@st.cache_resource(show_spinner=False)
-def _guest_store():
-    return {}
+# Maximum agent loop iterations
+MAX_AGENT_LOOPS = 5
 
 # Professional Color Palette
-PRIMARY_COLOR = "#0F766E"  # Teal
-SECONDARY_COLOR = "#06B6D4"  # Cyan
-ACCENT_COLOR = "#10B981"  # Emerald
-BACKGROUND_LIGHT = "#F0FDFA"  # Light teal
-TEXT_PRIMARY = "#0F172A"  # Slate
-TEXT_SECONDARY = "#475569"  # Slate gray
+PRIMARY_COLOR = "#0F766E"
+SECONDARY_COLOR = "#06B6D4"
+ACCENT_COLOR = "#10B981"
+BACKGROUND_LIGHT = "#F0FDFA"
+TEXT_PRIMARY = "#0F172A"
+TEXT_SECONDARY = "#475569"
 
-# =============== CHAT HISTORY MANAGEMENT ===============
+# =============== SESSION STATE ===============
 
-def get_chat_history_file(email: str) -> str:
-    """Generate chat history file path based on user email"""
-    if not os.path.exists(CHAT_HISTORY_DIR):
-        os.makedirs(CHAT_HISTORY_DIR)
-    
-    # Create a safe filename from email
-    safe_email = hashlib.md5(email.encode()).hexdigest()
-    return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_chat.json")
+def init_session_state():
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "total_queries" not in st.session_state:
+        st.session_state.total_queries = 0
+    if "model" not in st.session_state:
+        st.session_state.model = "DeepSeek"
+    if "rag_loaded" not in st.session_state:
+        st.session_state.rag_loaded = False
+    if "is_switching" not in st.session_state:
+        st.session_state.is_switching = False
+    if "dark_mode" not in st.session_state:
+        st.session_state.dark_mode = False
+    if "saved_chat" not in st.session_state:
+        st.session_state.saved_chat = None
+    if "chat_loaded" not in st.session_state:
+        st.session_state.chat_loaded = False
 
-def save_chat_history(email: str, messages: list, total_queries: int, model: str):
-    """Save chat history to JSON file for specific user"""
-    # Skip saving for guest users
-    if st.session_state.get("guest_authenticated"):
-        return True
-    try:
-        file_path = get_chat_history_file(email)
-        
-        # Convert messages to JSON-serializable format
-        serializable_messages = []
-        for msg in messages:
-            msg_copy = {
-                "role": msg["role"],
-                "content": msg["content"]
-            }
-            
-            # Convert Document-like objects or dicts to dictionaries
-            refs = []
-            if "references" in msg and msg["references"]:
-                for doc in msg["references"]:
-                    try:
-                        if isinstance(doc, dict):
-                            # Already a dict; copy safe keys
-                            page_content = doc.get("page_content", "")
-                            metadata = doc.get("metadata", {})
-                        else:
-                            # Assume object with page_content and metadata attributes
-                            page_content = getattr(doc, "page_content", "")
-                            metadata = getattr(doc, "metadata", {})
-                        refs.append({"page_content": page_content, "metadata": metadata})
-                    except Exception:
-                        # Fallback: stringify the doc to avoid failing the entire save
-                        try:
-                            refs.append({"page_content": str(doc), "metadata": {}})
-                        except Exception:
-                            refs.append({"page_content": "", "metadata": {}})
-            msg_copy["references"] = refs
-            
-            serializable_messages.append(msg_copy)
-        
-        # Preserve any existing title when overwriting the saved chat file, but only
-        # if there are messages present (so newly created empty sessions don't inherit
-        # a previous title when 'New' or 'Clear' is used).
-        existing_title = None
-        try:
-            # prefer session state's saved_chat title if available
-            existing_title = st.session_state.get("saved_chat", {}).get("title") if isinstance(st.session_state.get("saved_chat"), dict) else None
-        except Exception:
-            existing_title = None
-
-        # If not present in session state, read from existing file
-        if not existing_title and os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                    existing_title = existing.get("title")
-            except Exception:
-                existing_title = None
-
-        chat_data = {
-            "user_email": email,
-            "timestamp": datetime.now().isoformat(),
-            "messages": serializable_messages,
-            "total_queries": total_queries,
-            "model": model,
-        }
-        if existing_title and messages:
-            chat_data["title"] = existing_title
-        
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(chat_data, f, indent=2, ensure_ascii=False)
-        
-        return True
-    except Exception as e:
-        st.error(f"❌ Failed to save chat history: {e}")
-        return False
-
-def load_chat_history(email: str) -> dict:
-    """Load chat history from JSON file for specific user"""
-    try:
-        file_path = get_chat_history_file(email)
-        
-        if not os.path.exists(file_path):
-            return None
-        
-        with open(file_path, "r", encoding="utf-8") as f:
-            chat_data = json.load(f)
-        
-        return chat_data
-    except Exception as e:
-        print(f"Error loading chat history: {e}")
-        return None
-
-def delete_chat_history(email: str) -> bool:
-    """Delete chat history for specific user"""
-    try:
-        file_path = get_chat_history_file(email)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return True
-    except Exception as e:
-        print(f"Error deleting chat history: {e}")
-        return False
-
-# ---------- Archive helpers (minimal) ----------
-def _archive_filename_for(email: str, timestamp: str, title: str | None = None) -> str:
-    safe_email = hashlib.md5(email.encode("utf-8")).hexdigest()
-    uid = uuid4().hex[:8]
-    if title:
-        slug = "".join(c if c.isalnum() else "_" for c in title)[:40]
-        return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_archive_{timestamp}_{slug}_{uid}.json")
-    return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_archive_{timestamp}_{uid}.json")
-
-def archive_current_history(email: str) -> str | None:
-    """Create an independent archived copy of the current saved chat. Returns archive path."""
-    try:
-        current = get_chat_history_file(email)
-        if not os.path.exists(current):
-            return None
-        # Load current file and write a copy to an archive filename (avoid moving/overwriting)
-        try:
-            with open(current, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            return None
-
-        # Check if this content is already archived (compare with most recent archive)
-        archives = list_archived_histories(email)
-        if archives:
-            last_archive = load_archived_history(archives[0])
-            if last_archive:
-                # Compare messages content
-                current_msgs = data.get("messages", [])
-                last_msgs = last_archive.get("messages", [])
-                if len(current_msgs) == len(last_msgs):
-                    is_duplicate = True
-                    for i, msg in enumerate(current_msgs):
-                        if msg.get("content") != last_msgs[i].get("content"):
-                            is_duplicate = False
-                            break
-                    if is_duplicate:
-                        return archives[0]
-
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        archive_path = _archive_filename_for(email, ts)
-        with open(archive_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return archive_path
-    except Exception as e:
-        print(f"Error archiving chat history: {e}")
-        return None
-
-def archive_messages(email: str, messages: list, total_queries: int = 0, model: str = None, title: str | None = None) -> str | None:
-    """Create an archive file from an in-memory messages list. Returns archive path."""
-    try:
-        if not messages:
-            return None
-            
-        # Check for duplicates against the most recent archive
-        archives = list_archived_histories(email)
-        if archives:
-            last_archive = load_archived_history(archives[0])
-            if last_archive:
-                # Compare messages content
-                last_msgs = last_archive.get("messages", [])
-                if len(messages) == len(last_msgs):
-                    is_duplicate = True
-                    for i, msg in enumerate(messages):
-                        if msg.get("content") != last_msgs[i].get("content"):
-                            is_duplicate = False
-                            break
-                    if is_duplicate:
-                        return archives[0]
-
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        archive_path = _archive_filename_for(email, ts, title)
-        chat_data = {
-            "user_email": email,
-            "timestamp": datetime.now().isoformat(),
-            "title": title or "",
-            "messages": messages,
-            "total_queries": total_queries,
-            "model": model or st.session_state.get("model")
-        }
-        with open(archive_path, "w", encoding="utf-8") as f:
-            json.dump(chat_data, f, indent=2, ensure_ascii=False)
-        return archive_path
-    except Exception as e:
-        print(f"Error archiving messages: {e}")
-        return None
-
-def rename_saved_chat(email: str, new_title: str) -> bool:
-    """Update the title field in the current saved chat file."""
-    try:
-        path = get_chat_history_file(email)
-        if not os.path.exists(path):
-            return False
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data["title"] = new_title
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        print(f"Error renaming saved chat: {e}")
-        return False
-
-def list_archived_histories(email: str) -> list:
-    try:
-        safe = hashlib.md5(email.encode("utf-8")).hexdigest()
-        files = []
-        if os.path.exists(CHAT_HISTORY_DIR):
-            for fn in os.listdir(CHAT_HISTORY_DIR):
-                if fn.startswith(f"{safe}_archive_") and fn.endswith(".json"):
-                    files.append(os.path.join(CHAT_HISTORY_DIR, fn))
-        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-        return files
-    except Exception as e:
-        print(f"Error listing archives: {e}")
-        return []
-
-def load_archived_history(path: str) -> dict | None:
-    try:
-        if not os.path.exists(path):
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading archive {path}: {e}")
-        return None
-
-def delete_archived_history(path: str) -> bool:
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-            return True
-        return False
-    except Exception as e:
-        print(f"Error deleting archive {path}: {e}")
-        return False
-
-def rename_archived_history(path: str, new_title: str) -> str | None:
-    try:
-        if not os.path.exists(path):
-            return None
-        basename = os.path.basename(path)
-        parts = basename.split("_archive_")
-        if len(parts) < 2:
-            return None
-        prefix = parts[0]
-        # Use a high-resolution timestamp (including microseconds) to avoid collisions
-        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S_%f")
-        slug = "".join(c if c.isalnum() else "_" for c in new_title)[:60]
-        new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}.json")
-        # Update the file's internal JSON 'title' so the display uses the new title, then rename the file
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = None
-
-        if data is not None:
-            try:
-                data["title"] = new_title
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
-
-        # Finally rename the file to include the slug in the filename
-        # If new_path already exists, append a short uid to avoid accidental overwrite
-        if os.path.exists(new_path):
-            try:
-                alt_new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}_{uuid4().hex[:6]}.json")
-                os.replace(path, alt_new_path)
-                return alt_new_path
-            except Exception:
-                return path
-        else:
-            try:
-                os.replace(path, new_path)
-                return new_path
-            except Exception:
-                return path
-    except Exception as e:
-        print(f"Error renaming archive {path}: {e}")
-        return None
-
-# ------------------- CUSTOM CSS -------------------
+# =============== CUSTOM CSS (same as before, keeping it concise) ===============
 
 def load_custom_css(dark_mode=False):
     # Dark mode color overrides - using Tailwind Slate palette for cohesion
@@ -1081,178 +803,13 @@ def load_custom_css(dark_mode=False):
     </style>
     """, unsafe_allow_html=True)
 
-# ------------------- SESSION STATE -------------------
 
-def init_session_state():
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "total_queries" not in st.session_state:
-        st.session_state.total_queries = 0
-    if "model" not in st.session_state:
-        st.session_state.model = "DeepSeek"
-    if "rag_loaded" not in st.session_state:
-        st.session_state.rag_loaded = False
-    if "is_switching" not in st.session_state:
-        st.session_state.is_switching = False
-    if "dark_mode" not in st.session_state:
-        st.session_state.dark_mode = False
-    if "saved_chat" not in st.session_state:
-        st.session_state.saved_chat = None
-    if "chat_loaded" not in st.session_state:
-        st.session_state.chat_loaded = False
-
-# ------------------- RAG PIPELINE -------------------
-
+# In-memory store for guest sessions
 @st.cache_resource(show_spinner=False)
-def get_rag_pipeline(selected_model: str):
-    params = {}
-    if selected_model == "GPT-4o-mini":
-        params = {
-            "llm_type": "azure",
-            "azure_key": AZURE_OPENAI_KEY,
-            "azure_endpoint": AZURE_OPENAI_ENDPOINT,
-            "azure_deployment": AZURE_OPENAI_DEPLOYMENT,
-        }
-    else:  # DeepSeek
-        params = {
-            "llm_type": "deepseek",
-            "hf_token": HF_TOKEN,
-            "deepseek_url": DEEPSEEK_API_URL,
-            "deepseek_model": DEEPSEEK_MODEL_NAME,
-        }
-    return RAGPipeline(
-        pdf_folder=PDF_FOLDER,
-        index_file=INDEX_FILE,
-        model_params=params,
-    )
+def _guest_store():
+    return {}
 
-# ------------------- HELPER FUNCTIONS -------------------
-
-def get_user_initial(name: str) -> str:
-    """Get the first letter of the user's name"""
-    if name:
-        return name[0].upper()
-    return "U"
-
-def transcribe_audio(audio_bytes):
-    """Transcribe audio using Hugging Face Whisper API"""
-    if not audio_bytes:
-        return None
-        
-    API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "audio/wav" 
-    }
-    
-    try:
-        response = requests.post(API_URL, headers=headers, data=audio_bytes)
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("text", "").strip()
-        else:
-            st.error(f"Transcription failed: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        st.error(f"Error connecting to transcription service: {e}")
-        return None
-
-def clean_text_for_pdf(text):
-    """Clean text to remove problematic characters for latin-1 encoding"""
-    replacements = {
-        '\u201c': '"',  # Left double quotation mark
-        '\u201d': '"',  # Right double quotation mark
-        '\u2018': "'",  # Left single quotation mark
-        '\u2019': "'",  # Right single quotation mark
-        '\u2013': '-',  # En dash
-        '\u2014': '--', # Em dash
-        '\u2026': '...', # Ellipsis
-        '\u2022': '*',  # Bullet
-        '\u00a0': ' ',  # Non-breaking space
-    }
-    
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    
-    return text.encode('latin-1', errors='ignore').decode('latin-1')
-
-def export_conversation_pdf():
-    """Export conversation as PDF with proper formatting and encoding"""
-    try:
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        
-        # Header
-        pdf.set_font('Arial', 'B', 20)
-        pdf.set_text_color(15, 118, 110)
-        pdf.cell(0, 10, 'CircularIQ Conversation Export', 0, 1, 'C')
-        pdf.ln(5)
-        
-        # Metadata
-        pdf.set_font('Arial', '', 10)
-        pdf.set_text_color(71, 85, 105)
-        pdf.cell(0, 6, f'User: {st.session_state.get("user_email", "Unknown")}', 0, 1)
-        pdf.cell(0, 6, f'Date: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}', 0, 1)
-        pdf.cell(0, 6, f'Model: {st.session_state.model}', 0, 1)
-        pdf.cell(0, 6, f'Total Queries: {st.session_state.total_queries}', 0, 1)
-        pdf.ln(10)
-        
-        # Conversation
-        for i, msg in enumerate(st.session_state.messages, 1):
-            # Role header
-            pdf.set_font('Arial', 'B', 12)
-            pdf.set_text_color(15, 118, 110)
-            role_text = f"User (Message {i})" if msg["role"] == "user" else f"CircularIQ Assistant (Message {i})"
-            pdf.cell(0, 8, role_text, 0, 1)
-            
-            # Message content - clean the text
-            pdf.set_font('Arial', '', 10)
-            pdf.set_text_color(0, 0, 0)
-            cleaned_content = clean_text_for_pdf(msg['content'])
-            pdf.multi_cell(0, 6, cleaned_content)
-            pdf.ln(3)
-            
-            # References
-            if "references" in msg and msg["references"]:
-                pdf.set_font('Arial', 'I', 9)
-                pdf.set_text_color(71, 85, 105)
-                pdf.cell(0, 6, f'Sources: {len(msg["references"])} documents referenced', 0, 1)
-                
-                for j, doc in enumerate(msg["references"][:3], 1):
-                    # Handle both dict and Document objects
-                    if isinstance(doc, dict):
-                        src = clean_text_for_pdf(doc.get("metadata", {}).get("source", "Unknown"))
-                        page = doc.get("metadata", {}).get("page", "?")
-                    else:
-                        src = clean_text_for_pdf(doc.metadata.get("source", "Unknown"))
-                        page = doc.metadata.get("page", "?")
-                    
-                    pdf.set_font('Arial', '', 8)
-                    pdf.cell(0, 5, f'  {j}. {src} (Page {page})', 0, 1)
-                
-                pdf.ln(2)
-            
-            pdf.ln(5)
-        
-        # Footer
-        pdf.ln(10)
-        pdf.set_font('Arial', 'I', 8)
-        pdf.set_text_color(107, 114, 128)
-        pdf.multi_cell(0, 5, 'CircularIQ - Circular Bioeconomy Decision Support Assistant\nDeveloped by International Water Management Institute (IWMI)')
-        
-        # Convert to bytes
-        pdf_output = pdf.output(dest='S')
-        if isinstance(pdf_output, str):
-            pdf_output = pdf_output.encode('latin-1')
-        return pdf_output
-    
-    except Exception as e:
-        st.error(f"❌ PDF generation failed: {e}")
-        return None
-
-# ------------------- MAIN APP -------------------
+# =============== MAIN APP ===============
 
 def main():
     st.set_page_config(
@@ -1324,40 +881,12 @@ def main():
     if not st.session_state.get("chat_loaded", False):
         if not st.session_state.get("guest_authenticated"):
             chat_data = load_chat_history(user_email)
-            
-            # Check for session persistence via URL query params
-            # If 'session' param exists, it's a reload -> Restore chat.
-            # If 'session' param missing, it's a new tab/login -> New chat.
-            try:
-                query_params = st.query_params
-                session_id_param = query_params.get("session")
-            except Exception:
-                session_id_param = None
-
-            if not session_id_param:
-                # NEW SESSION: Archive old, start fresh
-                if chat_data and chat_data.get("messages"):
-                    archive_current_history(user_email)
-                
-                st.session_state.messages = []
-                st.session_state.total_queries = 0
-                st.session_state.model = chat_data.get("model", st.session_state.model) if chat_data else "DeepSeek"
-                st.session_state.saved_chat = None
-                save_chat_history(user_email, [], 0, st.session_state.model)
-                
-                # Set new session ID in URL to track this session across reloads
-                try:
-                    st.query_params["session"] = uuid4().hex
-                except Exception:
-                    pass
-            else:
-                # RELOAD: Restore current chat
-                if chat_data:
-                    st.session_state.saved_chat = chat_data
-                    st.session_state.messages = chat_data.get("messages", [])
-                    st.session_state.total_queries = chat_data.get("total_queries", 0)
-                    st.session_state.model = chat_data.get("model", st.session_state.model)
-                 
+            if chat_data:
+                # Restore saved chat to main messages so the user picks up where they left off
+                st.session_state.saved_chat = chat_data
+                st.session_state.messages = chat_data.get("messages", [])
+                st.session_state.total_queries = chat_data.get("total_queries", st.session_state.total_queries)
+                st.session_state.model = chat_data.get("model", st.session_state.model)
         st.session_state.chat_loaded = True
     
     # Show user info in sidebar
@@ -1386,19 +915,6 @@ def main():
             
             # Actual Streamlit logout button
             if st.button("↗️ Sign Out", key="logout_btn", use_container_width=True):
-                # Auto-save (archive) current session before signing out
-                try:
-                    if st.session_state.messages:
-                        archive_current_history(user_email)
-                except Exception:
-                    pass
-                
-                # Clear session param
-                try:
-                    st.query_params.clear()
-                except Exception:
-                    pass
-
                 # Import logout function
                 from google_auth import logout
                 logout()
@@ -1423,6 +939,9 @@ def main():
             st.rerun()
     
     rag = st.session_state.rag
+    
+    # Get LLM client for agent
+    llm_client = get_llm_client(st.session_state.model)
     
     # Sidebar
     with st.sidebar:
@@ -1530,7 +1049,6 @@ def main():
                     pass
 
                 # Clear live conversation and start fresh
-                st.session_state.rag.clear_conversation()
                 st.session_state.messages = []
                 st.session_state.total_queries = 0
 
@@ -1572,7 +1090,6 @@ def main():
                                 st.toast("Conversation archived.", icon="✅")
                     except Exception:
                         pass
-                    st.session_state.rag.clear_conversation() 
                     st.session_state.messages = []
                     st.session_state.total_queries = 0
                     # Only archive the on-disk saved session if we did NOT already archive the live messages
@@ -1688,31 +1205,14 @@ def main():
             # Finally, append the current saved session so that archived items appear above it
             saved = st.session_state.get("saved_chat")
             if saved:
-                # Check if current saved session is identical to ANY archive to avoid visual duplication
-                is_duplicate_of_archive = False
-                saved_msgs = saved.get("messages", [])
-                if saved_msgs: # Only check if there are messages
-                    for arch in archives:
-                        arch_msgs = arch.get("data", {}).get("messages", [])
-                        if len(saved_msgs) == len(arch_msgs):
-                            match = True
-                            for i, msg in enumerate(saved_msgs):
-                                if msg.get("content") != arch_msgs[i].get("content"):
-                                    match = False
-                                    break
-                            if match:
-                                is_duplicate_of_archive = True
-                                break
-                
-                if not is_duplicate_of_archive:
-                    conv_list.append({
-                        "type": "current",
-                        "id": "current",
-                        "title": (saved.get("title") or "Current saved session").strip(),
-                        "timestamp": saved.get("timestamp", "unknown"),
-                        "preview": (saved.get("messages") and saved.get("messages")[0].get("content", "")[:160]) or "",
-                        "data": saved
-                    })
+                conv_list.append({
+                    "type": "current",
+                    "id": "current",
+                    "title": (saved.get("title") or "Current saved session").strip(),
+                    "timestamp": saved.get("timestamp", "unknown"),
+                    "preview": (saved.get("messages") and saved.get("messages")[0].get("content", "")[:160]) or "",
+                    "data": saved
+                })
 
             if not conv_list:
                 st.markdown("_No saved or archived conversations found._")
@@ -2093,14 +1593,6 @@ def main():
                         st.session_state.messages[status_idx]["content"] = "⚠️ Transcription failed."
                 # persist changes
                 save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
-                # Update saved_chat to keep sidebar in sync
-                st.session_state.saved_chat = {
-                    "user_email": user_email,
-                    "messages": st.session_state.messages,
-                    "total_queries": st.session_state.total_queries,
-                    "model": st.session_state.model,
-                    "title": st.session_state.saved_chat.get("title") if st.session_state.get("saved_chat") else None
-                }
 
     if prompt:
         # Add user message to session state
@@ -2115,33 +1607,51 @@ def main():
             }
         else:
             save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
-            # Update saved_chat to keep sidebar in sync
-            st.session_state.saved_chat = {
-                "user_email": user_email,
-                "messages": st.session_state.messages,
-                "total_queries": st.session_state.total_queries,
-                "model": st.session_state.model,
-                "title": st.session_state.saved_chat.get("title") if st.session_state.get("saved_chat") else None
-            }
         
-        # Process with RAG
-        with st.spinner("🔍 Analyzing IWMI research documents..."):
+        # Build conversation history for agent (only user/assistant messages, no tool messages)
+        conv_history = []
+        for msg in st.session_state.messages[:-1]:  # Exclude current user message
+            if msg["role"] in ["user", "assistant"]:
+                conv_history.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # Run agent loop
+        with st.spinner("🤖 CircularIQ is thinking..."):
             try:
-                answer, references = rag.query(prompt)
-
+                # Determine LLM parameters
+                if st.session_state.model == "GPT-4o-mini":
+                    llm_type = "azure"
+                    model_deployment = AZURE_OPENAI_DEPLOYMENT
+                else:
+                    llm_type = "deepseek"
+                    model_deployment = None
+                
+                answer, retrieved_docs, loop_count = run_agent_loop(
+                    user_question=prompt,
+                    conversation_history=conv_history,
+                    rag_pipeline=rag,
+                    llm_client=llm_client,
+                    llm_type=llm_type,
+                    model_deployment=model_deployment
+                )
+                
                 msg_id = f"msg-{len(st.session_state.messages)}"
                 
-                # Add assistant response to session state
+                # Add assistant response
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer,
-                    "references": references,
+                    "references": retrieved_docs,
                     "msg_id": msg_id
                 })
                 st.session_state.total_queries += 1
+                
+                logger.info(f"Agent completed query in {loop_count} iterations")
             
             except Exception as e:
-                error_msg = f"⚠️ **Processing Error**\n\nI encountered an issue while processing your query: `{str(e)}`\n\nPlease try rephrasing your question or contact support if the issue persists."
+                error_msg = f"⚠️ **Processing Error**\n\nI encountered an issue: `{str(e)}`\n\nPlease try again."
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": error_msg,
@@ -2159,14 +1669,6 @@ def main():
             }
         else:
             save_chat_history(user_email, st.session_state.messages, st.session_state.total_queries, st.session_state.model)
-            # Update saved_chat to keep sidebar in sync
-            st.session_state.saved_chat = {
-                "user_email": user_email,
-                "messages": st.session_state.messages,
-                "total_queries": st.session_state.total_queries,
-                "model": st.session_state.model,
-                "title": st.session_state.saved_chat.get("title") if st.session_state.get("saved_chat") else None
-            }
         
         # Rerun to display the updated messages
         st.rerun()
@@ -2174,13 +1676,622 @@ def main():
     # Footer
     st.markdown("""
     <div style="text-align: center; padding: 2rem 0 1rem 0; color: #94A3B8; font-size: 0.85rem;">
-        <p>🌱 <strong>CircularIQ</strong> - Empowering Evidence-Based Decisions for a Sustainable Future</p>
-        <p style="font-size: 0.75rem; margin-top: 0.5rem;">
-            Developed by International Water Management Institute (IWMI) | 
-            <a href="https://www.iwmi.cgiar.org" target="_blank" style="color: #0F766E; text-decoration: none;">www.iwmi.cgiar.org</a>
-        </p>
+        <p>🌱 <strong>CircularIQ</strong> - Empowering Evidence-Based Decisions</p>
+        <p>Developed by IWMI | <a href="https://www.iwmi.cgiar.org">www.iwmi.cgiar.org</a></p>
     </div>
     """, unsafe_allow_html=True)
 
+
+def get_tool_definitions():
+    """Define available tools for the agent"""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "retrieve_documents",
+                "description": "Retrieve relevant documents from the IWMI knowledge base to answer questions about circular bioeconomy, waste management, water reuse, and sustainable agriculture. Use this tool when you need factual information from research documents.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The user's question or query to search for relevant documents"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Maximum number of documents to retrieve (default: 8)",
+                            "default": 8
+                        }
+                    },
+                    "required": ["question"]
+                }
+            }
+        }
+    ]
+
+def execute_tool(tool_name: str, tool_args: dict, rag_pipeline) -> dict:
+    """Execute a tool call and return the result"""
+    if tool_name == "retrieve_documents":
+        question = tool_args.get("question", "")
+        top_k = tool_args.get("top_k", 8)
+        
+        result = rag_pipeline.retrieve_documents(question, top_k)
+        return result
+    else:
+        return {
+            "success": False,
+            "message": f"Unknown tool: {tool_name}",
+            "documents": [],
+            "count": 0
+        }
+
+# =============== AGENT LOOP ===============
+
+def run_agent_loop(user_question: str, conversation_history: list, rag_pipeline, llm_client, llm_type: str, model_deployment: str = None) -> tuple:
+    """
+    Run agent loop with tool calling.
+    Returns: (final_answer, retrieved_documents, loop_count)
+    """
+    tools = get_tool_definitions()
+    
+    system_prompt = """You are the Circular Bioeconomy Decision Support Assistant (CBE-DSA) - an AI-powered chatbot developed to disseminate applied research and evidence-based insights from the International Water Management Institute (IWMI) and related partners.
+
+Your primary goal is to help users, including policymakers, industry professionals, entrepreneurs, investors, and development partners, make informed, evidence-based decisions in the circular bioeconomy and sustainable waste management.
+
+Role and Behaviour:
+- Serve as a research-driven knowledge advisor, interpreting academic and technical content into concise, practical, and actionable insights.
+- Remain accurate, context-aware, and user-oriented, tailoring responses to the user's role (e.g., policymaker vs. entrepreneur).
+- Use the retrieve_documents tool to search IWMI documents when you need factual information to answer questions.
+- After retrieving documents, synthesize the information into a clear, structured response.
+- For follow-up questions, use conversation history to provide coherent, contextual responses.
+- Sense the tone of the question to understand if the user needs generic or specific information.
+
+Tone and Communication Style:
+- Professional, clear, neutral, and factual.
+- Use plain language; cite sources when needed.
+- Emphasize practical impact and innovation.
+
+Response Format:
+- **Overview:** Provide a summary of the findings (20-30 words for specific questions, 50-100 words for response to generic questions).
+- **Key Points:**
+    • Use bullet points starting with "•".
+    • After EACH bullet point, insert a blank line (exactly one empty line).
+    • Each bullet point must be one sentence only.
+- **Implications:** Present the practical or policy relevance as bullet points (20-30 words for specific questions, 50-100 words for response to generic questions).
+- **If comparative or quantitative data are available**, display them using a **Markdown table** (| Column | Column |).
+- **Always cite sources** in [Source X] format after each claim.
+- **Avoid long paragraphs**; favour bullet points and tabular summaries for clarity.
+
+CONVERSATION FLOW & ENGAGEMENT (MANDATORY)
+- **Every response must end with a proactive, context-aware follow-up question or suggestion.**
+- Prefer follow-up questions that can be answered using details from previous exchanges or current information.
+- This keeps the conversation alive and guides the user toward deeper insights.
+
+Restrictions and Limitations:
+- Do not fabricate references, data, or methodologies.
+- Always clarify if a recommendation is derived from evidence or an inferred interpretation.
+- Avoid expressing political bias, or speculative prejudices.
+- Refrain from giving prescriptive financial or legal advice.
+
+TOOL USAGE:
+- When you need information to answer a question, use the retrieve_documents tool.
+- After receiving tool results, synthesize the information and provide a comprehensive answer.
+- If no relevant documents are found, acknowledge this and provide general guidance based on your training."""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add conversation history
+    if conversation_history:
+        messages.extend(conversation_history)
+    
+    # Add current user question
+    messages.append({"role": "user", "content": user_question})
+    
+    all_retrieved_docs = []
+    loop_count = 0
+    
+    for iteration in range(MAX_AGENT_LOOPS):
+        loop_count += 1
+        logger.info(f"Agent loop iteration {loop_count}/{MAX_AGENT_LOOPS}")
+        
+        try:
+            # Call LLM with tools
+            if llm_type == "azure":
+                response = llm_client.chat.completions.create(
+                    model=model_deployment,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    max_tokens=3500,
+                    temperature=0.1,
+                )
+                
+                response_message = response.choices[0].message
+                finish_reason = response.choices[0].finish_reason
+                
+            else:  # deepseek
+                headers = {
+                    "Authorization": f"Bearer {HF_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": DEEPSEEK_MODEL_NAME,
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "max_tokens": 3500,
+                    "temperature": 0.1
+                }
+                
+                r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+                
+                if r.status_code != 200:
+                    logger.error(f"DeepSeek API error: {r.status_code} - {r.text}")
+                    return f"Sorry, model error: {r.status_code}", [], loop_count
+                
+                data = r.json()
+                response_message = data["choices"][0]["message"]
+                finish_reason = data["choices"][0]["finish_reason"]
+            
+            # Check if tool calls are needed
+            tool_calls = getattr(response_message, 'tool_calls', None) or response_message.get('tool_calls')
+            
+            if not tool_calls or finish_reason == "stop":
+                # No more tool calls, return final answer
+                final_content = response_message.content if hasattr(response_message, 'content') else response_message.get('content', '')
+                logger.info(f"Agent completed in {loop_count} iterations")
+                return final_content, all_retrieved_docs, loop_count
+            
+            # Add assistant message with tool calls to history
+            messages.append({
+                "role": "assistant",
+                "content": response_message.content if hasattr(response_message, 'content') else response_message.get('content'),
+                "tool_calls": tool_calls if isinstance(tool_calls, list) else [tc.__dict__ if hasattr(tc, '__dict__') else tc for tc in tool_calls]
+            })
+            
+            # Execute each tool call
+            for tool_call in tool_calls:
+                if hasattr(tool_call, 'function'):
+                    function_name = tool_call.function.name
+                    function_args = json.loads(tool_call.function.arguments)
+                    tool_call_id = tool_call.id
+                else:
+                    function_name = tool_call['function']['name']
+                    function_args = json.loads(tool_call['function']['arguments'])
+                    tool_call_id = tool_call['id']
+                
+                logger.info(f"Executing tool: {function_name} with args: {function_args}")
+                
+                # Execute tool
+                tool_result = execute_tool(function_name, function_args, rag_pipeline)
+                
+                # Collect retrieved documents
+                if tool_result.get("success") and tool_result.get("documents"):
+                    all_retrieved_docs.extend(tool_result["documents"])
+                
+                # Format tool result for LLM
+                tool_response_content = json.dumps(tool_result)
+                
+                # Add tool response to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": tool_response_content
+                })
+            
+        except Exception as e:
+            logger.error(f"Agent loop error: {e}")
+            return f"Sorry, I encountered an error: {str(e)}", all_retrieved_docs, loop_count
+    
+    # Max iterations reached
+    logger.warning(f"Agent reached max iterations ({MAX_AGENT_LOOPS})")
+    return "I apologize, but I need more time to process your request. Please try rephrasing your question.", all_retrieved_docs, loop_count
+
+# =============== CHAT HISTORY MANAGEMENT ===============
+
+def get_chat_history_file(email: str) -> str:
+    if not os.path.exists(CHAT_HISTORY_DIR):
+        os.makedirs(CHAT_HISTORY_DIR)
+    safe_email = hashlib.md5(email.encode()).hexdigest()
+    return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_chat.json")
+
+def save_chat_history(email: str, messages: list, total_queries: int, model: str):
+    if st.session_state.get("guest_authenticated"):
+        return True
+    try:
+        file_path = get_chat_history_file(email)
+        
+        serializable_messages = []
+        for msg in messages:
+            msg_copy = {
+                "role": msg["role"],
+                "content": msg["content"]
+            }
+            
+            refs = []
+            if "references" in msg and msg["references"]:
+                for doc in msg["references"]:
+                    try:
+                        if isinstance(doc, dict):
+                            refs.append(doc)
+                        else:
+                            refs.append({"content": str(doc), "metadata": {}})
+                    except Exception:
+                        refs.append({"content": "", "metadata": {}})
+            msg_copy["references"] = refs
+            
+            serializable_messages.append(msg_copy)
+        
+        existing_title = None
+        try:
+            existing_title = st.session_state.get("saved_chat", {}).get("title") if isinstance(st.session_state.get("saved_chat"), dict) else None
+        except Exception:
+            existing_title = None
+
+        if not existing_title and os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                    existing_title = existing.get("title")
+            except Exception:
+                existing_title = None
+
+        chat_data = {
+            "user_email": email,
+            "timestamp": datetime.now().isoformat(),
+            "messages": serializable_messages,
+            "total_queries": total_queries,
+            "model": model,
+        }
+        if existing_title and messages:
+            chat_data["title"] = existing_title
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(chat_data, f, indent=2, ensure_ascii=False)
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ Failed to save chat history: {e}")
+        return False
+
+def load_chat_history(email: str) -> dict:
+    try:
+        file_path = get_chat_history_file(email)
+        
+        if not os.path.exists(file_path):
+            return None
+        
+        with open(file_path, "r", encoding="utf-8") as f:
+            chat_data = json.load(f)
+        
+        return chat_data
+    except Exception as e:
+        print(f"Error loading chat history: {e}")
+        return None
+
+def delete_chat_history(email: str) -> bool:
+    try:
+        file_path = get_chat_history_file(email)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return True
+    except Exception as e:
+        print(f"Error deleting chat history: {e}")
+        return False
+
+def _archive_filename_for(email: str, timestamp: str, title: str | None = None) -> str:
+    safe_email = hashlib.md5(email.encode("utf-8")).hexdigest()
+    uid = uuid4().hex[:8]
+    if title:
+        slug = "".join(c if c.isalnum() else "_" for c in title)[:40]
+        return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_archive_{timestamp}_{slug}_{uid}.json")
+    return os.path.join(CHAT_HISTORY_DIR, f"{safe_email}_archive_{timestamp}_{uid}.json")
+
+def archive_current_history(email: str) -> str | None:
+    try:
+        current = get_chat_history_file(email)
+        if not os.path.exists(current):
+            return None
+        try:
+            with open(current, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return None
+
+        # Don't archive empty conversations
+        if not data.get("messages"):
+            return None
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archive_path = _archive_filename_for(email, ts)
+        with open(archive_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return archive_path
+    except Exception as e:
+        print(f"Error archiving chat history: {e}")
+        return None
+
+def archive_messages(email: str, messages: list, total_queries: int = 0, model: str = None, title: str | None = None) -> str | None:
+    try:
+        if not messages:
+            return None
+        
+        # Check if this exact conversation is already the most recent archive to prevent duplicates
+        # (e.g. user restores a chat, then immediately clicks New without adding messages)
+        archives = list_archived_histories(email)
+        if archives:
+            last_archive = load_archived_history(archives[0])
+            if last_archive:
+                last_msgs = last_archive.get("messages", [])
+                # Simple length check first
+                if len(messages) == len(last_msgs):
+                    # Check content of last message to be reasonably sure
+                    if messages and last_msgs:
+                        if messages[-1].get("content") == last_msgs[-1].get("content"):
+                            # Check first message too
+                            if messages[0].get("content") == last_msgs[0].get("content"):
+                                return None
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        archive_path = _archive_filename_for(email, ts, title)
+        chat_data = {
+            "user_email": email,
+            "timestamp": datetime.now().isoformat(),
+            "title": title or "",
+            "messages": messages,
+            "total_queries": total_queries,
+            "model": model or st.session_state.get("model")
+        }
+        with open(archive_path, "w", encoding="utf-8") as f:
+            json.dump(chat_data, f, indent=2, ensure_ascii=False)
+        return archive_path
+    except Exception as e:
+        print(f"Error archiving messages: {e}")
+        return None
+
+def rename_saved_chat(email: str, new_title: str) -> bool:
+    try:
+        path = get_chat_history_file(email)
+        if not os.path.exists(path):
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["title"] = new_title
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error renaming saved chat: {e}")
+        return False
+
+def list_archived_histories(email: str) -> list:
+    try:
+        safe = hashlib.md5(email.encode("utf-8")).hexdigest()
+        files = []
+        if os.path.exists(CHAT_HISTORY_DIR):
+            for fn in os.listdir(CHAT_HISTORY_DIR):
+                if fn.startswith(f"{safe}_archive_") and fn.endswith(".json"):
+                    files.append(os.path.join(CHAT_HISTORY_DIR, fn))
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return files
+    except Exception as e:
+        print(f"Error listing archives: {e}")
+        return []
+
+def load_archived_history(path: str) -> dict | None:
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading archive {path}: {e}")
+        return None
+
+def delete_archived_history(path: str) -> bool:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error deleting archive {path}: {e}")
+        return False
+
+def rename_archived_history(path: str, new_title: str) -> str | None:
+    try:
+        if not os.path.exists(path):
+            return None
+        basename = os.path.basename(path)
+        parts = basename.split("_archive_")
+        if len(parts) < 2:
+            return None
+        prefix = parts[0]
+        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S_%f")
+        slug = "".join(c if c.isalnum() else "_" for c in new_title)[:60]
+        new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}.json")
+        
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+        if data is not None:
+            try:
+                data["title"] = new_title
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+        if os.path.exists(new_path):
+            try:
+                alt_new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}_{uuid4().hex[:6]}.json")
+                os.replace(path, alt_new_path)
+                return alt_new_path
+            except Exception:
+                return path
+        else:
+            try:
+                os.replace(path, new_path)
+                return new_path
+            except Exception:
+                return path
+    except Exception as e:
+        print(f"Error renaming archive {path}: {e}")
+        return None
+
+# =============== HELPER FUNCTIONS ===============
+
+def get_user_initial(name: str) -> str:
+    if name:
+        return name[0].upper()
+    return "U"
+
+def transcribe_audio(audio_bytes):
+    if not audio_bytes:
+        return None
+        
+    API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "audio/wav" 
+    }
+    
+    try:
+        response = requests.post(API_URL, headers=headers, data=audio_bytes)
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("text", "").strip()
+        else:
+            st.error(f"Transcription failed: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Error connecting to transcription service: {e}")
+        return None
+
+def clean_text_for_pdf(text):
+    replacements = {
+        '\u201c': '"',
+        '\u201d': '"',
+        '\u2018': "'",
+        '\u2019': "'",
+        '\u2013': '-',
+        '\u2014': '--',
+        '\u2026': '...',
+        '\u2022': '*',
+        '\u00a0': ' ',
+    }
+    
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    return text.encode('latin-1', errors='ignore').decode('latin-1')
+
+def export_conversation_pdf():
+    try:
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        
+        pdf.set_font('Arial', 'B', 20)
+        pdf.set_text_color(15, 118, 110)
+        pdf.cell(0, 10, 'CircularIQ Conversation Export', 0, 1, 'C')
+        pdf.ln(5)
+        
+        pdf.set_font('Arial', '', 10)
+        pdf.set_text_color(71, 85, 105)
+        pdf.cell(0, 6, f'User: {st.session_state.get("user_email", "Unknown")}', 0, 1)
+        pdf.cell(0, 6, f'Date: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}', 0, 1)
+        pdf.cell(0, 6, f'Model: {st.session_state.model}', 0, 1)
+        pdf.cell(0, 6, f'Total Queries: {st.session_state.total_queries}', 0, 1)
+        pdf.ln(10)
+        
+        for i, msg in enumerate(st.session_state.messages, 1):
+            pdf.set_font('Arial', 'B', 12)
+            pdf.set_text_color(15, 118, 110)
+            role_text = f"User (Message {i})" if msg["role"] == "user" else f"CircularIQ Assistant (Message {i})"
+            pdf.cell(0, 8, role_text, 0, 1)
+            
+            pdf.set_font('Arial', '', 10)
+            pdf.set_text_color(0, 0, 0)
+            cleaned_content = clean_text_for_pdf(msg['content'])
+            pdf.multi_cell(0, 6, cleaned_content)
+            pdf.ln(3)
+            
+            if "references" in msg and msg["references"]:
+                pdf.set_font('Arial', 'I', 9)
+                pdf.set_text_color(71, 85, 105)
+                pdf.cell(0, 6, f'Sources: {len(msg["references"])} documents referenced', 0, 1)
+                
+                for j, doc in enumerate(msg["references"][:3], 1):
+                    if isinstance(doc, dict):
+                        src = clean_text_for_pdf(doc.get("metadata", {}).get("source", "Unknown"))
+                        page = doc.get("metadata", {}).get("page", "?")
+                    else:
+                        src = clean_text_for_pdf(doc.get("source", "Unknown"))
+                        page = doc.get("page", "?")
+                    
+                    pdf.set_font('Arial', '', 8)
+                    pdf.cell(0, 5, f'  {j}. {src} (Page {page})', 0, 1)
+                
+                pdf.ln(2)
+            
+            pdf.ln(5)
+        
+        pdf.ln(10)
+        pdf.set_font('Arial', 'I', 8)
+        pdf.set_text_color(107, 114, 128)
+        pdf.multi_cell(0, 5, 'CircularIQ - Circular Bioeconomy Decision Support Assistant\nDeveloped by International Water Management Institute (IWMI)')
+        
+        pdf_output = pdf.output(dest='S')
+        if isinstance(pdf_output, str):
+            pdf_output = pdf_output.encode('latin-1')
+        return pdf_output
+    
+    except Exception as e:
+        st.error(f"❌ PDF generation failed: {e}")
+        return None
+
+
+# =============== RAG PIPELINE ===============
+
+@st.cache_resource(show_spinner=False)
+def get_rag_pipeline(selected_model: str):
+    params = {}
+    if selected_model == "GPT-4o-mini":
+        params = {
+            "llm_type": "azure",
+            "azure_key": AZURE_OPENAI_KEY,
+            "azure_endpoint": AZURE_OPENAI_ENDPOINT,
+            "azure_deployment": AZURE_OPENAI_DEPLOYMENT,
+        }
+    else:
+        params = {
+            "llm_type": "deepseek",
+            "hf_token": HF_TOKEN,
+            "deepseek_url": DEEPSEEK_API_URL,
+            "deepseek_model": DEEPSEEK_MODEL_NAME,
+        }
+    return RAGPipeline(
+        pdf_folder=PDF_FOLDER,
+        index_file=INDEX_FILE,
+        model_params=params,
+    )
+
+@st.cache_resource(show_spinner=False)
+def get_llm_client(selected_model: str):
+    """Get LLM client for agent loop"""
+    if selected_model == "GPT-4o-mini":
+        from openai import AzureOpenAI
+        return AzureOpenAI(
+            api_key=AZURE_OPENAI_KEY,
+            api_version="2024-02-15-preview",
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        )
+    else:
+        return None
 if __name__ == "__main__":
-    main()
+    main() 
