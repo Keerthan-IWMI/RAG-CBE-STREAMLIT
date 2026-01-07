@@ -1841,12 +1841,16 @@ def main():
 
                 import re
                 def repl(m, _msg_id=msg_id):
-                    label = m.group(0)                 # e.g. "[Source 3]"
-                    num = re.findall(r"\d+", label)[0] # "3"
-                    target = f"{_msg_id}-source-{num}"
-                    return f'<a href="#{target}" onclick="window.highlightSource(\'{target}\'); return false;">{label}</a>'
+                    text = m.group(0)
+                    def inner_repl(match):
+                        label = match.group(0)
+                        num = re.findall(r"\d+", label)[0]
+                        target = f"{_msg_id}-source-{num}"
+                        return f'<a href="#{target}" onclick="window.highlightSource(\'{target}\'); return false;">{label}</a>'
+                    return re.sub(r"Source\s+\d+", inner_repl, text)
 
-                content = re.sub(r"\[Source\s+\d+\]", repl, content)
+                # Match patterns like [Source 1] or [Source 1, Source 2]
+                content = re.sub(r"\[(?:Source\s+\d+(?:,\s*)?)+\]", repl, content)
                 st.markdown(content, unsafe_allow_html=True)
             else:
                 st.markdown(content)
