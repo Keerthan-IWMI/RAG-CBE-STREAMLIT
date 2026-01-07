@@ -1,7 +1,18 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
-import CloseIcon from "@mui/icons-material/Close";
-import SendIcon from "@mui/icons-material/Send";
+
+// Clean SVG icons
+const CloseIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 6L6 18M6 6l12 12"/>
+  </svg>
+);
+
+const SendIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+  </svg>
+);
 
 interface SupportModalProps {
   visible: boolean;
@@ -116,7 +127,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ visible, onClose, darkMode 
               borderRadius: '4px',
             }}
           >
-            <CloseIcon style={{ fontSize: '20px' }} />
+            <CloseIcon />
           </button>
         </div>
 
@@ -164,7 +175,7 @@ const SupportModal: React.FC<SupportModalProps> = ({ visible, onClose, darkMode 
             lineHeight: 1,
           }}
         >
-          <SendIcon style={{ fontSize: '16px', width: '16px', height: '16px' }} />
+          <SendIcon />
           <span>Send Message</span>
         </button>
       </div>

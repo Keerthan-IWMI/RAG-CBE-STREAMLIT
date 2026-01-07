@@ -274,10 +274,13 @@ def check_google_auth():
     google_oauth = GoogleOAuth()
     params = st.query_params
 
-    # DEBUG: Print initialization
-    print(f"🔍 DEBUG - Auth Check Started")
-    print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
-    print(f"   query_params: {params}")
+    # Debug logging only when needed (set DEBUG_AUTH=1 to enable)
+    import os
+    debug_enabled = os.environ.get("DEBUG_AUTH") == "1"
+    if debug_enabled:
+        print(f"🔍 DEBUG - Auth Check Started")
+        print(f"   redirect_uri loaded: {google_oauth.redirect_uri}")
+        print(f"   query_params: {params}")
 
     # ========== HANDLE GUEST LOGIN ==========
     # Check for persistent guest_session param FIRST (survives refresh)
@@ -396,7 +399,8 @@ def check_google_auth():
 
     # ========== CHECK SESSION STATE ==========
     if st.session_state.get("google_authenticated"):
-        print(f"✅ User already in session state")
+        if debug_enabled:
+            print(f"✅ User already in session state")
         
         # --- ADDED: Ensure URL has session ID ---
         user_info = st.session_state.get("google_user")
@@ -408,7 +412,8 @@ def check_google_auth():
         
         session_start = st.session_state.get("session_start_time")
         if session_start and (time.time() - session_start) < (2 * 60 * 60):
-            print(f"✅ Session still valid")
+            if debug_enabled:
+                print(f"✅ Session still valid")
             return True
         else:
             print(f"⏰ Session expired - logging out")
@@ -416,10 +421,12 @@ def check_google_auth():
             return False
 
     # ========== CHECK PERSISTENT STORAGE ==========
-    print(f"🔍 Checking persistent storage...")
+    if debug_enabled:
+        print(f"🔍 Checking persistent storage...")
     stored_auth = load_tokens_from_file()
     if stored_auth:
-        print(f"✅ Found stored tokens - restoring...")
+        if debug_enabled:
+            print(f"✅ Found stored tokens - restoring...")
         tokens = stored_auth["tokens"]
         user_info = stored_auth["user_info"]
         
@@ -440,11 +447,13 @@ def check_google_auth():
         if st.query_params.get("session") != session_hash:
             st.query_params["session"] = session_hash
         
-        print(f"✅ Restored from storage")
+        if debug_enabled:
+            print(f"✅ Restored from storage")
         return True
 
     # ========== SHOW LOGIN PAGE ==========
-    print(f"📝 No authentication found - showing login page")
+    if debug_enabled:
+        print(f"📝 No authentication found - showing login page")
     if not st.session_state.get("google_authenticated"):
         auth_url = google_oauth.get_authorization_url()
         print(f"   Auth URL: {auth_url[:100]}...")

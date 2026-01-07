@@ -11,6 +11,7 @@ from streamlit_chat_widget import chat_input_widget
 from streamlit_float import float_init
 import tiktoken
 import logging
+import time
 
 # Import RAG pipeline
 from cbe_agent import RAGPipeline
@@ -18,6 +19,21 @@ from google_auth import check_google_auth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Small helper to avoid rapid double-toggles of theme from multiple UI sources
+def safe_toggle_theme(throttle_ms: int = 50) -> bool:
+    """Toggle st.session_state.dark_mode, but ignore repeated toggles within throttle_ms milliseconds.
+    Returns True if a toggle occurred, False if ignored due to throttle."""
+    now = int(time.time() * 1000)
+    last = st.session_state.get("_last_theme_toggle_ms", 0)
+    if now - last < throttle_ms:
+        logger.debug(f"Ignored rapid theme toggle (delta {now-last}ms < {throttle_ms}ms)")
+        # Ignore very-rapid toggles (likely duplicate events)
+        return False
+    st.session_state["_last_theme_toggle_ms"] = now
+    st.session_state.dark_mode = not st.session_state.dark_mode
+    logger.info(f"Theme toggled to {'dark' if st.session_state.dark_mode else 'light'}")
+    return True
 
 # ------------------- CONFIG -------------------
 PDF_FOLDER = "C://iwmi-remote-work//CBE-Chatbot//New folder//cbe//agri and waste water"
@@ -593,12 +609,15 @@ def load_custom_css(dark_mode=False):
         box-shadow: {"0 4px 12px rgba(20, 184, 166, 0.4)" if dark_mode else "0 4px 12px rgba(15, 118, 110, 0.3)"} !important;
     }}
     
-    header {{
-        visibility: visible !important;
+    /* Keep header visible but hide only the Deploy button */
+    header[data-testid="stHeader"] {{
+        background: transparent !important;
     }}
     
-    header[data-testid="stHeader"] {{
-        background-color: transparent !important;
+    /* Hide Deploy button only */
+    .stDeployButton,
+    [data-testid="stToolbar"] > div:has(button[data-testid="stToolbarActionButtonDeploy"]) {{
+        display: none !important;
     }}
     
     section[data-testid="stSidebar"] button[kind="header"] {{
@@ -927,8 +946,8 @@ def main():
             # Dark mode toggle
             st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
             if st.button("🌙 Dark Mode" if not st.session_state.dark_mode else "☀️ Light Mode", key="theme_toggle_btn", use_container_width=True):
-                st.session_state.dark_mode = not st.session_state.dark_mode
-                st.rerun()
+                if safe_toggle_theme():
+                    st.rerun()
     
     # Professional loading screen
     if not st.session_state.rag_loaded:
@@ -1166,7 +1185,7 @@ def main():
                 """,
                 unsafe_allow_html=True,
             )
-            # Build a flat list: archived sessions first (newest first), then current saved (so archives stack above saved)
+            # Build a flat list: archived sessions first (newest first), then current saved (so archives stack above)
             conv_list = []
 
             # load archive files and sort by the JSON 'timestamp' field (newest first)
@@ -1369,7 +1388,7 @@ def main():
                                     else:
                                         okdel = delete_archived_history(c['path'])
                                         if okdel:
-                                            st.toast("🗑️ Deleted archived session", icon="✅")
+                                            st.toast("🗑️ Deleted archived session", icon="✅");
                                             st.session_state[menu_state_key] = False
                                             st.rerun()
                     # Visual separation between conversation rows
@@ -1530,13 +1549,43 @@ def main():
         # Use message count as key to reset widget after each send (prevents duplicate re-sends on rerun)
         widget_key = f"chat_widget_{len(st.session_state.messages)}"
         user_input = None
+        
+        # Prepare conversation history for React sidebar
+        conversations_for_ui = []
+        try:
+            archive_files = list_archived_histories(user_email) or []
+            for af in archive_files[:10]:  # Load up to 10 recent conversations
+                arch_data = load_archived_history(af)
+                if arch_data:
+                    # Try to get title from data or generate from first user message
+                    title = arch_data.get("title")
+                    if not title and arch_data.get("messages"):
+                        # Find first user message for title
+                        for msg in arch_data["messages"]:
+                            if msg.get("role") == "user" and msg.get("content"):
+                                content = str(msg["content"]).strip()
+                                title = content[:35] + "..." if len(content) > 35 else content
+                                break
+                    if title:
+                        conversations_for_ui.append({
+                            "id": os.path.basename(af),
+                            "title": title
+                        })
+        except Exception as e:
+            print(f"Error loading archives for sidebar: {e}")
+        
         try:
             user_input = chat_input_widget(
                 key=widget_key,
                 pdf_data=pdf_data_b64,
                 pdf_filename=f"CircularIQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                 dark_mode=st.session_state.dark_mode,
-                show_suggestions=(len(st.session_state.messages) == 0)
+                show_suggestions=(len(st.session_state.messages) == 0),
+                # Enable React UI overlay
+                enable_react_ui=True,
+                user_email=user_email,
+                user_name=st.session_state.get("user_name", ""),
+                conversations=conversations_for_ui
             )
         except Exception as e:
             # Log minimal error info and present fallback so the app remains functional
@@ -1572,6 +1621,65 @@ def main():
     prompt = None
     
     if user_input:
+        # Handle React sidebar actions
+        if "action" in user_input:
+            action = user_input["action"]
+            if action == "new_chat":
+                st.session_state.messages = []
+                st.session_state.total_queries = 0
+                st.rerun()
+            elif action == "clear_chat":
+                st.session_state.messages = []
+                st.rerun()
+            elif action == "toggle_theme":
+                logger.warning("Frontend sent legacy 'toggle_theme' action. Please clear browser cache.")
+                if safe_toggle_theme():
+                    st.rerun()
+            elif action == "set_theme":
+                # explicit theme set from frontend: { action: 'set_theme', theme: 'dark'|'light' }
+                theme = user_input.get("theme")
+                if theme in ("dark", "light"):
+                    desired = (theme == "dark")
+                    if st.session_state.dark_mode != desired:
+                        st.session_state.dark_mode = desired
+                        logger.info(f"Theme explicitly set to {theme}")
+                        st.rerun()
+                    else:
+                        logger.info(f"Theme set request to {theme} ignored (already set)")
+                        pass
+            elif action == "sign_out":
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
+            elif action == "download_pdf":
+                # PDF download is handled by the widget itself
+                pass
+            elif action.startswith("load_"):
+                # Load archived conversation
+                archive_id = action[5:]  # Remove "load_" prefix
+                archive_path = os.path.join(CHAT_HISTORY_DIR, archive_id)
+                if os.path.exists(archive_path):
+                    arch_data = load_archived_history(archive_path)
+                    if arch_data and arch_data.get("messages"):
+                        st.session_state.messages = arch_data["messages"]
+                        st.session_state.total_queries = arch_data.get("total_queries", 0)
+                        st.rerun()
+            elif action.startswith("rename_"):
+                # Rename archived conversation
+                archive_id = action[7:]  # Remove "rename_" prefix
+                new_title = user_input.get("newTitle", "")
+                if new_title:
+                    archive_path = os.path.join(CHAT_HISTORY_DIR, archive_id)
+                    if os.path.exists(archive_path):
+                        rename_archived_history(archive_path, new_title)
+                        st.rerun()
+            elif action.startswith("delete_"):
+                # Delete archived conversation
+                archive_id = action[7:]  # Remove "delete_" prefix
+                archive_path = os.path.join(CHAT_HISTORY_DIR, archive_id)
+                if os.path.exists(archive_path):
+                    delete_archived_history(archive_path)
+                    st.rerun()
 
         if "text" in user_input and user_input["text"]:
             # Text input from typing
@@ -1685,6 +1793,7 @@ def main():
                 logger.info(f"Agent completed query in {loop_count} iterations")
             
             except Exception as e:
+                logger.error(f"Agent processing error: {e}")
                 error_msg = f"⚠️ **Processing Error**\n\nI encountered an issue: `{str(e)}`\n\nPlease try again."
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -2064,7 +2173,7 @@ def archive_current_history(email: str) -> str | None:
         if not data.get("messages"):
             return None
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_path = _archive_filename_for(email, ts)
         with open(archive_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -2094,7 +2203,7 @@ def archive_messages(email: str, messages: list, total_queries: int = 0, model: 
                             if messages[0].get("content") == last_msgs[0].get("content"):
                                 return None
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_path = _archive_filename_for(email, ts, title)
         chat_data = {
             "user_email": email,
@@ -2169,7 +2278,7 @@ def rename_archived_history(path: str, new_title: str) -> str | None:
         if len(parts) < 2:
             return None
         prefix = parts[0]
-        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S")
         slug = "".join(c if c.isalnum() else "_" for c in new_title)[:60]
         new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}.json")
         
@@ -2356,4 +2465,4 @@ def get_llm_client(selected_model: str):
     else:
         return None
 if __name__ == "__main__":
-    main() 
+    main()

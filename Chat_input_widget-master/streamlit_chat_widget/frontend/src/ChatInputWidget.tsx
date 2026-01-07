@@ -9,6 +9,8 @@ import InputField from "./components/InputField";
 import MicButton from "./components/MicButton";
 import SendButton from "./components/SendButton";
 import RecordingIndicator from "./components/RecordingIndicator";
+import ReactSidebar from "./components/ReactSidebar";
+import ReactHeader from "./components/ReactHeader";
 
 
 interface ChatInputWidgetProps extends ComponentProps {
@@ -17,6 +19,11 @@ interface ChatInputWidgetProps extends ComponentProps {
     pdf_filename?: string;
     dark_mode?: boolean;
     show_suggestions?: boolean;
+    // New: optional UI overlay props
+    enable_react_ui?: boolean;
+    user_email?: string;
+    user_name?: string;
+    conversations?: Array<{ id: string; title: string }>;
   };
 }
 
@@ -35,6 +42,7 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [showSupport, setShowSupport] = useState(false);
   const [filters, setFilters] = useState<{ yearStart?: string; yearEnd?: string; author?: string; keywords?: string }>({ yearStart: "", yearEnd: "", author: "", keywords: "" });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // no explicit anchor required for inline popover
 
   // Pdf data from args (used for download)
@@ -42,6 +50,88 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
   const pdfFilename = args.pdf_filename ?? "conversation.pdf";
   const darkMode = args.dark_mode ?? false;
   const showSuggestions = args.show_suggestions ?? false;
+  
+  // New UI overlay props
+  const enableReactUI = args.enable_react_ui ?? false;
+  const userEmail = args.user_email ?? "";
+  const userName = args.user_name ?? "";
+  const conversations = args.conversations ?? [];
+
+  // Inject CSS to hide native Streamlit sidebar/header when React UI is enabled
+  // Use a ref to track if we've injected to prevent flicker on re-renders
+  const cssInjectedRef = React.useRef(false);
+  
+  useEffect(() => {
+    if (!enableReactUI) return;
+    
+    let doc: Document;
+    try {
+      doc = window.parent?.document ?? document;
+    } catch {
+      doc = document;
+    }
+    
+    const styleId = "react-ui-overlay-styles";
+    
+    // Only inject once to prevent flicker
+    if (cssInjectedRef.current) return;
+    cssInjectedRef.current = true;
+    
+    // Check if already exists
+    if (doc.getElementById(styleId)) return;
+    
+    const style = doc.createElement('style');
+    style.id = styleId;
+    style.innerHTML = `
+      /* Hide native Streamlit sidebar completely */
+      section[data-testid="stSidebar"] {
+        display: none !important;
+      }
+      
+      /* Hide the sidebar collapse/expand button (>>) */
+      [data-testid="collapsedControl"],
+      button[data-testid="collapsedControl"],
+      div[data-testid="collapsedControl"] {
+        display: none !important;
+      }
+      
+      /* Hide native Streamlit header */
+      header[data-testid="stHeader"] {
+        display: none !important;
+      }
+      
+      /* Hide deploy button and toolbar */
+      .stDeployButton,
+      [data-testid="stToolbar"] {
+        display: none !important;
+      }
+      
+      /* Adjust main content area for React sidebar (280px) and header (64px) */
+      .main .block-container {
+        padding-left: 300px !important;
+        padding-top: 80px !important;
+        max-width: 100% !important;
+      }
+      
+      /* Hide the Python-rendered header-container */
+      .header-container {
+        display: none !important;
+      }
+      
+      /* Hide any remaining streamlit elements */
+      .stAppViewBlockContainer > div:first-child > div:first-child {
+        display: none !important;
+      }
+      
+      /* Ensure body doesn't have conflicting styles */
+      body {
+        overflow-x: hidden;
+      }
+    `;
+    doc.head.appendChild(style);
+    
+    // Don't cleanup on unmount to prevent flicker - styles are needed throughout session
+  }, [enableReactUI]);
 
   useEffect(() => {
     Streamlit.setFrameHeight();
@@ -127,6 +217,20 @@ const ChatInputWidget: React.FC<ChatInputWidgetProps> = ({ args }) => {
 
   return (
     <div className="chat-widget-wrapper">
+      {/* Render React UI overlays when enabled */}
+      {enableReactUI && (
+        <>
+          <ReactSidebar 
+            darkMode={darkMode} 
+            userEmail={userEmail}
+            userName={userName}
+            conversations={conversations}
+            onCollapseChange={setSidebarCollapsed}
+          />
+          <ReactHeader darkMode={darkMode} sidebarCollapsed={sidebarCollapsed} />
+        </>
+      )}
+      
       {showSuggestions && (
         <div className={`suggestion-chips ${darkMode ? 'dark' : ''}`}>
           {SUGGESTIONS.map((s, i) => (
