@@ -1836,6 +1836,9 @@ def main():
                 # Ensure each assistant message has a unique msg_id
                 msg_id = message.get("msg_id", f"msg-{idx}")
 
+                # Fix bullet point rendering
+                content = content.replace("•", "-")
+
                 import re
                 def repl(m, _msg_id=msg_id):
                     label = m.group(0)                 # e.g. "[Source 3]"
