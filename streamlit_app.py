@@ -1017,13 +1017,14 @@ def main():
         # Chat Management - without section box
         st.markdown('<div class="section-content">', unsafe_allow_html=True)
         # Helper: extract first user message to use as a conversation title (minimal, single-line)
-        def _first_user_title_from_msgs(msgs:list) -> str | None:
+
+        def _first_user_title_from_msgs(msgs: list) -> str | None:
             try:
                 for m in msgs:
                     if isinstance(m, dict) and m.get('role') == 'user' and m.get('content'):
                         first_line = str(m.get('content')).strip().splitlines()[0]
                         # Remove obvious UI emojis that we use for archive labels so the title is clean
-                        first_line = first_line.replace('📦','').replace('🎁','').strip()
+                        first_line = first_line.replace('📦', '').replace('🎁', '').strip()
                         if len(first_line) > 60:
                             return first_line[:57] + '...'
                         return first_line
@@ -1088,26 +1089,10 @@ def main():
         with col2:
             if st.button("🗑️ Clear", use_container_width=True, help="Clear all messages"):
                 if len(st.session_state.messages) > 0:
-                    # Archive current conversation before clearing (best-effort)
-                    archived_in_memory = False
-                    try:
-                        msgs = st.session_state.get("messages", [])
-                        if msgs:
-                            title = _first_user_title_from_msgs(msgs) or None
-                            archived = archive_messages(user_email, msgs, st.session_state.get("total_queries", 0), st.session_state.get("model"), title)
-                            if archived:
-                                archived_in_memory = True
-                                st.toast("Conversation archived.", icon="✅")
-                    except Exception:
-                        pass
+                    # Clear live conversation and start fresh
                     st.session_state.messages = []
                     st.session_state.total_queries = 0
-                    # Only archive the on-disk saved session if we did NOT already archive the live messages
-                    try:
-                        if not archived_in_memory:
-                            archive_current_history(user_email)
-                    except Exception:
-                        pass
+                    
                     if st.session_state.get("guest_authenticated") and st.session_state.get("guest_session_id"):
                         store = _guest_store()
                         store[st.session_state.guest_session_id] = {
@@ -1116,14 +1101,17 @@ def main():
                             "model": st.session_state.model,
                         }
                     else:
-                        # Save to file (empty current)
-                        save_chat_history(user_email, [], 0, st.session_state.model)
+                        # Remove the saved current session (don't create an empty saved conversation)
+                        try:
+                            delete_chat_history(user_email)
+                        except Exception:
+                            pass
                         # Clear any load-on-start flag since the current session is now empty
                         try:
                             clear_load_on_start(user_email)
                         except Exception:
                             pass
-                        # Refresh saved_chat so the sidebar shows the newly archived item above previous ones
+                        # Refresh saved_chat so the sidebar does not show an empty current session
                         st.session_state.saved_chat = load_chat_history(user_email)
                     st.toast("🗑️ Chat cleared!", icon="✅")
                     st.rerun()
@@ -1166,7 +1154,7 @@ def main():
                 """,
                 unsafe_allow_html=True,
             )
-            # Build a flat list: archived sessions first (newest first), then current saved (so archives stack above saved)
+            # Build a flat list: archived sessions first (newest first), then current saved (so archives stack above)
             conv_list = []
 
             # load archive files and sort by the JSON 'timestamp' field (newest first)
@@ -1252,6 +1240,8 @@ def main():
                             return str(ts)
 
                 for idx, c in enumerate(conv_list):
+                    # Use stable unique key based on conversation id (path or "current")
+                    stable_key = hashlib.md5(str(c.get('id', idx)).encode()).hexdigest()[:12]
                     cols = st.columns([7,1,1])
                     col_title, col_space, col_menu = cols[0], cols[1], cols[2]
                     # Compact title (single-line) to avoid multi-line buttons in the sidebar
@@ -1266,7 +1256,7 @@ def main():
                     # Title (clickable) and timestamp below
                     with col_title:
                         title_label = display_title
-                        if st.button(title_label, key=f"restore_label_{idx}", help=(c.get('preview') or ''), use_container_width=True):
+                        if st.button(title_label, key=f"restore_label_{stable_key}", help=(c.get('preview') or ''), use_container_width=True):
                             # Restore messages but remove duplicate entries (preserve order)
                             raw_msgs = c['data'].get('messages', []) or []
                             seen = set()
@@ -1317,8 +1307,8 @@ def main():
                         st.markdown(f"<div style='font-size:11px;color: #6b7280;margin-top:4px'>{display_ts}</div>", unsafe_allow_html=True)
 
                     # Three-dot menu toggles inline options - use a separate widget key and a state key
-                    menu_btn_key = f"menu_btn_{idx}"
-                    menu_state_key = f"menu_toggle_{idx}"
+                    menu_btn_key = f"menu_btn_{stable_key}"
+                    menu_state_key = f"menu_toggle_{stable_key}"
 
                     # Ensure there's a default state for the menu (closed)
                     if menu_state_key not in st.session_state:
@@ -1335,13 +1325,14 @@ def main():
 
                     # If menu open, show inline rename / delete controls
                     if st.session_state.get(menu_state_key):
+                        logger.info(f"[DEBUG-MENU] Menu OPEN for: type={c['type']}, id={c.get('id')}, stable_key={stable_key}")
                         with st.container():
                             # Render rename input and actions inline to avoid vertical stacking
                             action_cols = st.columns([3,1,1])
                             with action_cols[0]:
-                                new_title = st.text_input("", key=f"rename_input_{idx}", value=c.get('title',''), placeholder="Rename", label_visibility="collapsed")
+                                new_title = st.text_input("", key=f"rename_input_{stable_key}", value=c.get('title',''), placeholder="Rename", label_visibility="collapsed")
                             with action_cols[1]:
-                                if st.button("✏️", key=f"apply_rename_{idx}", help="Rename conversation"):
+                                if st.button("✏️", key=f"apply_rename_{stable_key}", help="Rename conversation"):
                                     # Rename current saved or archived
                                     if c['type'] == 'current':
                                         ok = rename_saved_chat(user_email, new_title)
@@ -1359,17 +1350,20 @@ def main():
                                             st.session_state[menu_state_key] = False
                                             st.rerun()
                             with action_cols[2]:
-                                if st.button("🗑️", key=f"delete_item_{idx}", help="Delete conversation"):
+                                if st.button("🗑️", key=f"delete_item_{stable_key}", help="Delete conversation"):
+                                    logger.info(f"[DEBUG-DELETE] TRIGGERED: type={c['type']}, id={c.get('id')}, path={c.get('path')}, title={c.get('title')}")
                                     if c['type'] == 'current':
+                                        logger.info(f"[DEBUG-DELETE] Deleting CURRENT session file")
                                         delete_chat_history(user_email)
                                         st.session_state.saved_chat = None
                                         st.toast("🗑️ Deleted saved session", icon="✅")
                                         st.session_state[menu_state_key] = False
                                         st.rerun()
                                     else:
+                                        logger.info(f"[DEBUG-DELETE] Deleting ARCHIVE: {c.get('path')}")
                                         okdel = delete_archived_history(c['path'])
                                         if okdel:
-                                            st.toast("🗑️ Deleted archived session", icon="✅")
+                                            st.toast("🗑️ Deleted archived session", icon="✅");
                                             st.session_state[menu_state_key] = False
                                             st.rerun()
                     # Visual separation between conversation rows
@@ -1746,7 +1740,7 @@ def get_tool_definitions():
                     },
                     "required": ["question"]
                 }
-            }
+                       }
         }
     ]
 
@@ -2041,11 +2035,13 @@ def load_chat_history(email: str) -> dict:
 def delete_chat_history(email: str) -> bool:
     try:
         file_path = get_chat_history_file(email)
+        logger.info(f"[DEBUG-SAVED-DELETE] Attempting to delete saved chat: {file_path}")
         if os.path.exists(file_path):
             os.remove(file_path)
+            logger.info(f"[DEBUG-SAVED-DELETE] Deleted saved chat: {file_path}")
         return True
     except Exception as e:
-        print(f"Error deleting chat history: {e}")
+        logger.error(f"Error deleting chat history: {e}")
         return False
 
 def _archive_filename_for(email: str, timestamp: str, title: str | None = None) -> str:
@@ -2067,11 +2063,27 @@ def archive_current_history(email: str) -> str | None:
         except Exception:
             return None
 
-        # Don't archive empty conversations
-        if not data.get("messages"):
+        # Don't archive empty conversations or those with no assistant response
+        msgs = data.get("messages", [])
+        if not msgs:
+            return None
+        if not any(m.get("role") == "assistant" for m in msgs):
             return None
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        # Check against last archive to avoid duplicates
+        archives = list_archived_histories(email)
+        if archives:
+            last_archive = load_archived_history(archives[0])
+            if last_archive:
+                last_msgs = last_archive.get("messages", [])
+                # Simple comparison of message count and content
+                if len(msgs) == len(last_msgs):
+                    if msgs and last_msgs:
+                        if msgs[-1].get("content") == last_msgs[-1].get("content"):
+                             if msgs[0].get("content") == last_msgs[0].get("content"):
+                                 return None
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_path = _archive_filename_for(email, ts)
         with open(archive_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -2083,6 +2095,10 @@ def archive_current_history(email: str) -> str | None:
 def archive_messages(email: str, messages: list, total_queries: int = 0, model: str = None, title: str | None = None) -> str | None:
     try:
         if not messages:
+            return None
+            
+        # Don't archive if there are no assistant responses (e.g. user just typed "Hi" and cleared)
+        if not any(m.get("role") == "assistant" for m in messages):
             return None
         
         # Check if this exact conversation is already the most recent archive to prevent duplicates
@@ -2101,7 +2117,7 @@ def archive_messages(email: str, messages: list, total_queries: int = 0, model: 
                             if messages[0].get("content") == last_msgs[0].get("content"):
                                 return None
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_path = _archive_filename_for(email, ts, title)
         chat_data = {
             "user_email": email,
@@ -2159,12 +2175,15 @@ def load_archived_history(path: str) -> dict | None:
 
 def delete_archived_history(path: str) -> bool:
     try:
+        logger.info(f"[DEBUG-ARCH-DELETE] Attempting to delete archive: {path}")
         if os.path.exists(path):
             os.remove(path)
+            logger.info(f"[DEBUG-ARCH-DELETE] Deleted archive: {path}")
             return True
+        logger.info(f"[DEBUG-ARCH-DELETE] Archive not found: {path}")
         return False
     except Exception as e:
-        print(f"Error deleting archive {path}: {e}")
+        logger.error(f"Error deleting archive {path}: {e}")
         return False
 
 def rename_archived_history(path: str, new_title: str) -> str | None:
@@ -2176,7 +2195,7 @@ def rename_archived_history(path: str, new_title: str) -> str | None:
         if len(parts) < 2:
             return None
         prefix = parts[0]
-        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y%m%d_%H%M%S")
         slug = "".join(c if c.isalnum() else "_" for c in new_title)[:60]
         new_path = os.path.join(CHAT_HISTORY_DIR, f"{prefix}_archive_{ts}_{slug}.json")
         
@@ -2211,7 +2230,7 @@ def rename_archived_history(path: str, new_title: str) -> str | None:
         print(f"Error renaming archive {path}: {e}")
         return None
 
-# =============== HELPER FUNCTIONS ===============
+
 
 def get_user_initial(name: str) -> str:
     if name:
@@ -2273,7 +2292,7 @@ def export_conversation_pdf():
         pdf.set_font('Arial', '', 10)
         pdf.set_text_color(71, 85, 105)
         pdf.cell(0, 6, f'User: {st.session_state.get("user_email", "Unknown")}', 0, 1)
-        pdf.cell(0, 6, f'Date: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}', 0, 1)
+        pdf.cell(0, 6, f'Date: {datetime.now().strftime("%B %d, 2023 at %I:%M %p")}', 0, 1)
         pdf.cell(0, 6, f'Model: {st.session_state.model}', 0, 1)
         pdf.cell(0, 6, f'Total Queries: {st.session_state.total_queries}', 0, 1)
         pdf.ln(10)
@@ -2363,4 +2382,4 @@ def get_llm_client(selected_model: str):
     else:
         return None
 if __name__ == "__main__":
-    main() 
+    main()
